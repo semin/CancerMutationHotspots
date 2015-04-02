@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(4)
+registerDoMC(5)
 
 require(proxy)
 require(sqldf)
@@ -160,7 +160,7 @@ foreach(scntFile=scntFiles) %dopar% {
     write.table(scntGrpVepDf[, c("space", "start", "end", "allele", "strand")],
                 scntGrpVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
 
-    scntGrpVepSigDf = subset(scntGrpVepDf, rscnt_per_sloci > 1)
+    scntGrpVepSigDf = subset(scntGrpVepDf, rscnt_per_sloci >= rscntPerSloci)
     scntGrpVepSigFile = gsub(sprintf("hotspot%d", distCut), sprintf("hotspot%d.sig%d", distCut, rscntPerSloci), scntGrpVepFile)
     write.table(scntGrpVepSigDf[, c("space", "start", "end", "allele", "strand")],
                 scntGrpVepSigFile, row.names = F, col.names = F, sep = "\t", quote = F)
@@ -276,16 +276,17 @@ for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     hotspotSigVepOutDf = rbind(hotspotSigVepOutDf, hotspotSigVepOutChrDf)
 }
 
-hotspotSigVepOutFile = file.path(panVcfDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.sig%d.vep_out.exp.txt", distCut, rscntPerSloci))
-write.table(hotspotSigVepOutDf, hotspotSigVepOutFile, row.names = F, col.names = T, sep = "\t", quote = F)
+#hotspotSigVepOutFile = file.path(panVcfDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.sig%d.vep_out.exp.txt", distCut, rscntPerSloci))
+#write.table(hotspotSigVepOutDf, hotspotSigVepOutFile, row.names = F, col.names = T, sep = "\t", quote = F)
 #hotspotSigVepOutDf = read.delim(hotspotSigVepOutFile, header = T, as.is = T)
-head(hotspotSigVepOutDf)
-tail(hotspotSigVepOutDf)
+#head(hotspotSigVepOutDf)
+#tail(hotspotSigVepOutDf)
 
 hotspotSigVepOutDf[, "space"] = gsub("(^\\S+?):.*", "\\1", hotspotSigVepOutDf$Location, perl = T)
 hotspotSigVepOutDf[, "start"] = sapply(hotspotSigVepOutDf$Location, function(x) { strsplit(strsplit(x, ":", fixed = T)[[1]][2], "-", fixed = T)[[1]][1] })
 hotspotSigVepOutDf[, "end"] = sapply(hotspotSigVepOutDf$Location, function(x) { strsplit(strsplit(x, ":", fixed = T)[[1]][2], "-", fixed = T)[[1]][2] })
 hotspotSigVepOutDf[is.na(hotspotSigVepOutDf$end), "end"] = hotspotSigVepOutDf[is.na(hotspotSigVepOutDf$end), "start"]
+
 hotspotSigVepOutMergedDf = merge(hotspotSigVepOutDf, hotspotSigDf, by = c("space", "start", "end"), all.x = TRUE)
 hotspotSigVepOutMergedDf = hotspotSigVepOutMergedDf[order(-hotspotSigVepOutMergedDf$nrscnt),]
 head(hotspotSigVepOutMergedDf)
@@ -374,9 +375,9 @@ hotspotSigGenesDf = sqldf('SELECT space, start, end, SYMBOL, sids
                           GROUP BY space, start, end, SYMBOL
                           ORDER BY nrscnt DESC')
 
-head(hotspotSigGenesDf)
-tail(hotspotSigGenesDf)
-nrow(hotspotSigGenesDf)
+#head(hotspotSigGenesDf)
+#tail(hotspotSigGenesDf)
+#nrow(hotspotSigGenesDf)
 
 #for (i in 1:nrow(hotspotSigGenesDf)) {
 hotspotSigGenesNewDf <- foreach (i=1:nrow(hotspotSigGenesDf), .combine=rbind) %dopar% {
@@ -406,30 +407,32 @@ hotspotSigGenesNewDf <- foreach (i=1:nrow(hotspotSigGenesDf), .combine=rbind) %d
         wtPvalueGeneLog2FoldExpMutVsWdt = my.wilcox.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
         hotspotSigGenesDf[i, "ttPvalueGeneLog2FoldExpMutVsWdt"] = ttPvalueGeneLog2FoldExpMutVsWdt
         hotspotSigGenesDf[i, "wtPvalueGeneLog2FoldExpMutVsWdt"] = wtPvalueGeneLog2FoldExpMutVsWdt
-        if (ttPvalueGeneLog2FoldExpMutVsWdt <= 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt <= 0.05) {
-            cat(sprintf("Found a significant expression change of %s in %s mutant group!\n", geneName, hotspotName))
-            geneLog2FoldExpMutVsWdtDf = data.frame()
-            geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep(hotspotName, length(mepids)), log2FoldRsem = rsemLog2FoldGeneMt))
-            geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(wepids)), log2FoldRsem = rsemLog2FoldGeneWt))
-            p = ggplot(geneLog2FoldExpMutVsWdtDf, aes(factor(type), log2FoldRsem)) +
-                geom_boxplot() + 
-                theme(plot.title   = element_text(size = baseFontSize + 2, face="bold"),
-                    axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
-                    axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
-                    axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
-                    axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
-                    panel.grid.major = element_blank(),
-                    panel.grid.minor = element_blank(),
-                    panel.background = element_rect(color = "black", fill="white"),
-                    legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
-                    legend.text  = element_text(size = baseFontSize, family="sans"),
-                    legend.direction = "horizontal",
-                    legend.position = "bottom"
-                    ) +
-                scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f", wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
-                scale_y_continuous(name = sprintf("Log2 fold change of %s expression\n", geneName))
-            mutVsWdtExpPlotFile = file.path(figDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, geneName))
-            ggsave(filename = mutVsWdtExpPlotFile, plot = p, width = 5, height = 6)
+        if (!is.na(ttPvalueGeneLog2FoldExpMutVsWdt) & !is.na(wtPvalueGeneLog2FoldExpMutVsWdt)) {
+            if (ttPvalueGeneLog2FoldExpMutVsWdt <= 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt <= 0.05) {
+                cat(sprintf("Found a significant expression change of %s in %s mutant group!\n", geneName, hotspotName))
+                geneLog2FoldExpMutVsWdtDf = data.frame()
+                geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep(hotspotName, length(mepids)), log2FoldRsem = rsemLog2FoldGeneMt))
+                geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(wepids)), log2FoldRsem = rsemLog2FoldGeneWt))
+                p = ggplot(geneLog2FoldExpMutVsWdtDf, aes(factor(type), log2FoldRsem)) +
+                    geom_boxplot() + 
+                    theme(plot.title   = element_text(size = baseFontSize + 2, face="bold"),
+                        axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+                        axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+                        axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
+                        axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+                        panel.grid.major = element_blank(),
+                        panel.grid.minor = element_blank(),
+                        panel.background = element_rect(color = "black", fill="white"),
+                        legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+                        legend.text  = element_text(size = baseFontSize, family="sans"),
+                        legend.direction = "horizontal",
+                        legend.position = "bottom"
+                        ) +
+                    scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f", wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
+                    scale_y_continuous(name = sprintf("Log2 fold change of %s expression\n", geneName))
+                mutVsWdtExpPlotFile = file.path(figDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, geneName))
+                ggsave(filename = mutVsWdtExpPlotFile, plot = p, width = 5, height = 6)
+            }
         }
     } else {
         hotspotSigGenesDf[i, "ttPvalueGeneLog2FoldExpMutVsWdt"] = NA
@@ -437,6 +440,40 @@ hotspotSigGenesNewDf <- foreach (i=1:nrow(hotspotSigGenesDf), .combine=rbind) %d
     }
     hotspotSigGenesDf[i,]
 }
+
+head(hotspotSigGenesNewDf, 100)
+#tail(hotspotSigGenesNewDf)
+
+##
+## Add annotation for known cancer genes
+##
+allOncoFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/allonco/allonco_20130923.tsv")
+allOncoDf = read.delim(allOncoFile, header = T, as.is = T)
+hotspotSigGenesNewDf$allOnco = ifelse(hotspotSigGenesNewDf$SYMBOL %in% allOncoDf$symbol, "Y", "N")
+
+cgcFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/cosmic/cancer_gene_census.csv")
+cgcDf = read.csv(cgcFile, header = T, as.is = T)
+hotspotSigGenesNewDf$cosmic = ifelse(hotspotSigGenesNewDf$SYMBOL %in% cgcDf$Gene.Symbol, "Y", "N")
+
+tcgaSmgFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/tcga-pancan/hcd.txt")
+tcgaSmgDf = read.delim(tcgaSmgFile, header = T, as.is = T)
+hotspotSigGenesNewDf$TCGA_PanCan_SMG = ifelse(hotspotSigGenesNewDf$SYMBOL %in% tcgaSmgDf$Gene.Symbol, "Y", "N")
+
+
+##
+## Add supporing evidence from HiC data?
+##
+
+
+##
+## Save results to a file
+##
+
+hotspotSigVepOutMergedNewDf = merge(hotspotSigVepOutMergedDf, hotspotSigGenesNewDf, by = c("space", "start", "end", "SYMBOL", "sids"), all.x = TRUE)
+hotspotSigVepOutMergedNewDf = hotspotSigVepOutMergedNewDf[order(-hotspotSigVepOutMergedNewDf$nrscnt),]
+head(hotspotSigVepOutMergedNewDf)
+hotspotSigVepOutMergedNewFile = file.path(panVcfDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.sig%d.vep_out.exp.with_scnt.new.txt", distCut, rscntPerSloci))
+write.table(hotspotSigVepOutMergedNewDf, hotspotSigVepOutMergedNewFile, row.names = F, col.names = T, sep = "\t", quote = F)
 
 
 ##
