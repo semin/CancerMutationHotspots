@@ -149,7 +149,7 @@ def annotate_vcfs_with_vep
   ucsc_db_dir = $base_dir + "ucsc/database"
   fantom5_dir = $base_dir + "fantom5"
   dbsuper_dir = $base_dir + "dbsuper/all"
-  vcfs = Pathname.glob($vcf_dir + "*.cadd.vcf.gz").sort
+  vcfs = Pathname.glob($vcf_dir + "cancer/*/*.cadd.vcf.gz").sort
   Parallel.each_with_index(vcfs, :in_threads => 4) do |vcf, vi|
     vep_vcf = vcf.dirname + vcf.basename(".gz").sub_ext(".vep.vcf.gz")
     lsfout = vep_vcf.sub_ext(".gz.lsfout")
@@ -376,7 +376,7 @@ if __FILE__ == $0
   #annotate_vcfs_with_1000genomes_afs
   #annotate_vcfs_with_esp6500si_afs
   #annotate_snp_vcfs_with_cadd
-  #annotate_vcfs_with_vep
+  annotate_vcfs_with_vep
   #split_vcfs_by_chr
   #sanitize_vcfs(Pathname.glob($vcf_dir + "pancan/*.somatic.chr*.vcf.gz").sort)
   #split_vcfs_by_recurrence
