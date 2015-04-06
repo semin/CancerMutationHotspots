@@ -44,7 +44,6 @@ gdacDir = file.path(baseDir, "gdac")
 gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
-scntFiles = mixedsort(Sys.glob(file.path(panVcfDir, "*.scnt.txt")))
 
 chrs = c(1:22, "X", "Y")
 chrs = factor(chrs, level=chrs)
@@ -54,10 +53,28 @@ distCut = 100
 rscntPerSloci = 2
 baseFontSize = 15
 
-foreach(scntFile=scntFiles) %dopar% {
+# Load chrom size information
+hg19File = file.path(baseDir, "ucsc/database/hg19.genome")
+hg19Df = read.delim(hg19File, header=T, as.is=T)
+hg19Df = hg19Df[hg19Df$chrom %in% chrs,]
+hg19Df$chrom = factor(hg19Df$chrom, levels=chrs)
+hg19Df = hg19Df[order(hg19Df$chrom),]
+
+# Cluster mutations
+scntFiles = mixedsort(Sys.glob(file.path(panVcfDir, "*.scnt.txt")))
+#foreach(scntFile=scntFiles) %dopar% {
+for (scntFile in scntFiles) {
     cat(sprintf("Processing %s ...\n", scntFile))
     scntDf = read.delim(scntFile, header = F, as.is = T)
     colnames(scntDf) = c("chrom", "pos", "ref", "alt", "scnt", "sids", "cadd_raw", "cadd_phred")
+
+    # Calculate total number of SNVs for each patient
+    allSids = unique(unlist(sapply(scntDf$sids, function(x) { unlist(strsplit(strsplit(x, ",")[[1]], ";")) })))
+    chrScnt = list()
+    for (sid in allSids) {
+        chrScnt[[sid]] = length(grep(sid, scntDf$sids))
+    }
+    #hist(unlist(chrScnt))
 
     scntGrp = list()
     grpIdx = 1
@@ -73,6 +90,21 @@ foreach(scntFile=scntFiles) %dopar% {
     }
 
     #length(scntGrp)
+
+    chrLen = hg19Df[hg19Df$chrom == scntDf$chrom[1],]$size
+    scntGrpPvalues = mclapply(scntGrp, function(x) {
+                                  hsDf = scntDf[x,];
+                                  hsLen = max(hsDf$pos) - min(hsDf$pos) + 1;
+                                  prod(sapply(allSids, function(y) { dhyper(length(grep(y, hsDf$sids)), hsLen, chrLen - hsLen, chrScnt[[sid]]) })) },
+                                  mc.cores = 6)
+
+    scntGrpPvalues = unlist(scntGrpPvalues)
+    #summary(scntGrpPvalues)
+    #hist(scntGrpPvalues)
+
+    scntGrpFdrs = p.adjust(scntGrpPvalues, method = "fdr")
+    #summary(scntGrpFdrs)
+    #hist(scntGrpFdrs)
 
     scntGrpStartPos = lapply(scntGrp, function(x) { min(scntDf[x, "pos"]) })
     scntGrpStartPos = unlist(scntGrpStartPos)
@@ -148,6 +180,8 @@ foreach(scntFile=scntFiles) %dopar% {
                            nrscnt = scntGrpNrSnvCnt,
                            rscnt_rate = scntGrpSnvRate,
                            rscnt_per_sloci = scntGrpSnvCnt / scntGrpSnvLoci,
+                           p_value = scntGrpPvalues,
+                           adj_p_value = scntGrpFdrs,
                            sids = scntGrpStartSids,
                            avg_cadd_raw = scntGrpCaddRaw,
                            avg_cadd_phred = scntGrpCaddPhred)
