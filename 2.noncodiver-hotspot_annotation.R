@@ -4,8 +4,11 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(5)
+registerDoMC(12)
 
+require(hash)
+require(Rcpp)
+require(RcppArmadillo)
 require(proxy)
 require(sqldf)
 require(gdata)
@@ -19,19 +22,6 @@ require(GenomicRanges)
 require(org.Hs.eg.db)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
-
-##
-## Define custom functions
-##
-my.t.test.p.value <- function(...) { 
-    obj<-try(t.test(...), silent=TRUE) 
-    if (is(obj, "try-error")) return(NA) else if (is.nan(obj$p.value)) return(NA) else return(obj$p.value) 
-} 
-
-my.wilcox.test.p.value <- function(...) { 
-    obj<-try(wilcox.test(...), silent=TRUE) 
-    if (is(obj, "try-error")) return(NA) else if (is.nan(obj$p.value)) return(NA) else return(obj$p.value) 
-} 
 
 ##
 ## Initialize global variables
@@ -50,6 +40,8 @@ chrs = factor(chrs, level=chrs)
 cchrs = sapply(chrs, function(x) paste("chr", x, sep=""))
 cchrs = factor(cchrs, level=cchrs)
 distCut = 100
+margin = 50
+permNo = 100
 rscntPerSloci = 2
 baseFontSize = 15
 
@@ -62,11 +54,18 @@ hg19Df = hg19Df[order(hg19Df$chrom),]
 
 # Cluster mutations
 scntFiles = mixedsort(Sys.glob(file.path(panVcfDir, "*.scnt.txt")))
+
 #foreach(scntFile=scntFiles) %dopar% {
 for (scntFile in scntFiles) {
     cat(sprintf("Processing %s ...\n", scntFile))
     scntDf = read.delim(scntFile, header = F, as.is = T)
     colnames(scntDf) = c("chrom", "pos", "ref", "alt", "scnt", "sids", "cadd_raw", "cadd_phred")
+    #scntDf$tscnt = sapply(scntDf$scnt, function(x) { sum( as.numeric(unlist(sapply(x, function(x) strsplit(x, ",", fixed = T)[[1]])))) } )
+    distPos <- foreach(i=2:nrow(scntDf), .combine = c) %dopar% {
+        return(scntDf[i,]$pos - scntDf[i-1,]$pos)
+    }
+    summary(distPos)
+    hist(distPos)
 
     # Calculate total number of SNVs for each patient
     allSids = unique(unlist(sapply(scntDf$sids, function(x) { unlist(strsplit(strsplit(x, ",")[[1]], ";")) })))
@@ -74,7 +73,6 @@ for (scntFile in scntFiles) {
     for (sid in allSids) {
         chrScnt[[sid]] = length(grep(sid, scntDf$sids))
     }
-    #hist(unlist(chrScnt))
 
     scntGrp = list()
     grpIdx = 1
@@ -88,121 +86,190 @@ for (scntFile in scntFiles) {
             scntGrp[[grpIdx]] = i
         }
     }
-
     #length(scntGrp)
 
-    chrLen = hg19Df[hg19Df$chrom == scntDf$chrom[1],]$size
-    scntGrpPvalues = mclapply(scntGrp, function(x) {
-                                  hsDf = scntDf[x,];
-                                  hsLen = max(hsDf$pos) - min(hsDf$pos) + 1;
-                                  prod(sapply(allSids, function(y) { dhyper(length(grep(y, hsDf$sids)), hsLen, chrLen - hsLen, chrScnt[[sid]]) })) },
-                                  mc.cores = 6)
+    grpDistPos <- foreach(i=2:length(scntGrp), .combine = c) %dopar% {
+        prevGrp = scntGrp[[i-1]]
+        currGrp = scntGrp[[i]]
+        return(min(scntDf[currGrp,]$pos) - max(scntDf[prevGrp,]$pos))
+    }
+    summary(grpDistPos)
 
-    scntGrpPvalues = unlist(scntGrpPvalues)
-    #summary(scntGrpPvalues)
-    #hist(scntGrpPvalues)
+    #scntGrpSids = lapply(scntGrp, function(x) { unique(as.vector(unlist(sapply(as.vector(unlist(sapply(scntDf[x, "sids"],
+                                                                                                       #function(x) strsplit(x, ",", fixed = T)[[1]]))),
+                                                                               #function(y) strsplit(y, ";", fixed = T)[[1]])))) })
 
-    scntGrpFdrs = p.adjust(scntGrpPvalues, method = "fdr")
-    #summary(scntGrpFdrs)
-    #hist(scntGrpFdrs)
+    scntGrpSids = lapply(scntGrp, function(x) { unique(unlist(sapply(scntDf[x, "sids"],
+                                                                     function(x) { unlist(strsplit(strsplit(x, ",")[[1]], ";")) }))) })
 
-    scntGrpStartPos = lapply(scntGrp, function(x) { min(scntDf[x, "pos"]) })
-    scntGrpStartPos = unlist(scntGrpStartPos)
+    #scntGrpSids = sort(unique(unlist(scntGrpSids)))
+    #scntGrpSids2 = sort(unique(unlist(scntGrpSids2)))
+    #length(scntGrpSids)
+    #length(scntGrpSids2)
+    #identical(scntGrpSids, scntGrpSids2)
 
-    #length(scntGrpStartPos)
+    scntGrpSids = lapply(scntGrpSids, function(x) { paste(x, collapse = ",") } )
+    scntGrpSids = unlist(scntGrpSids)
 
-    scntGrpEndPos = lapply(scntGrp, function(x) { max(scntDf[x, "pos"]) })
-    scntGrpEndPos = unlist(scntGrpEndPos)
+    scntGrpSidCnt = as.vector(sapply(scntGrpSids, function(x) length(strsplit(x, ",", fixed = T)[[1]])))
+    summary(scntGrpSidCnt)
 
-    scntGrpSnvLoci = sapply(1:length(scntGrp), function(i) { nrow(scntDf[scntGrp[[i]],]) })
-    scntGrpSnvLoci = unlist(scntGrpSnvLoci)
+    scntSelGrp = scntGrp[scntGrpSidCnt > 1]
+    length(scntSelGrp)
 
-    scntGrpSnvCnt = sapply(1:length(scntGrp), function(i) { sum( as.numeric(unlist(sapply(scntDf[scntGrp[[i]], "scnt"], function(x) strsplit(x, ",", fixed = T)[[1]])))) } )
-    scntGrpSnvCnt = unlist(scntGrpSnvCnt)
+    scntSelGrpSids = lapply(scntSelGrp, function(x) { unique(as.vector(unlist(sapply(as.vector(unlist(sapply(scntDf[x, "sids"],
+                                                                                                       function(x) strsplit(x, ",", fixed = T)[[1]]))),
+                                                                               function(y) strsplit(y, ";", fixed = T)[[1]])))) })
+    scntSelGrpSids = lapply(scntSelGrpSids, function(x) { paste(x, collapse = ",") } )
+    scntSelGrpSids = unlist(scntSelGrpSids)
 
-    #length(scntGrpSnvCnt)
-    #summary(scntGrpSnvCnt)
+    scntSelGrpSidCnt = as.vector(sapply(scntSelGrpSids, function(x) length(strsplit(x, ",", fixed = T)[[1]])))
 
-    scntGrpSnvRate = sapply(1:length(scntGrp), function(x) { scntGrpSnvCnt[x] / (max(scntDf[scntGrp[[x]], "pos"]) - min(scntDf[scntGrp[[x]], "pos"]) + 1) })
-    scntGrpSnvRate = unlist(scntGrpSnvRate)
+    scntSelGrpStartPos = lapply(scntSelGrp, function(x) { min(scntDf[x, "pos"]) - margin })
+    scntSelGrpStartPos = unlist(scntSelGrpStartPos)
 
-    #length(scntGrpSnvRate)
-    #summary(scntGrpSnvRate)
+    scntSelGrpEndPos = lapply(scntSelGrp, function(x) { max(scntDf[x, "pos"]) + margin })
+    scntSelGrpEndPos = unlist(scntSelGrpEndPos)
 
-    scntGrpStartSids = lapply(scntGrp, function(x) { unique(as.vector(unlist(sapply(as.vector(unlist(sapply(scntDf[x, "sids"],
-                                                                          function(x) strsplit(x, ",", fixed = T)[[1]]))),
-                                                                   function(y) strsplit(y, ";", fixed = T)[[1]])))) })
-    scntGrpStartSids = lapply(scntGrpStartSids, function(x) { paste(x, collapse = ",") } )
-    scntGrpStartSids = unlist(scntGrpStartSids)
+    scntSelGrpSnvLoci = sapply(1:length(scntSelGrp), function(i) { nrow(scntDf[scntSelGrp[[i]],]) })
+    scntSelGrpSnvLoci = unlist(scntSelGrpSnvLoci)
 
-    #head(scntGrpStartSids)
-    #length(scntGrpStartSids)
-    #summary(elementLengths(scntGrpStartSids))
+    scntSelGrpSnvCnt = sapply(1:length(scntSelGrp), function(i) { sum( as.numeric(unlist(sapply(scntDf[scntSelGrp[[i]], "scnt"], function(x) strsplit(x, ",", fixed = T)[[1]])))) } )
+    scntSelGrpSnvCnt = unlist(scntSelGrpSnvCnt)
 
-    scntGrpNrSnvCnt = as.vector(sapply(scntGrpStartSids, function(x) length(strsplit(x, ",", fixed = T)[[1]])))
-    #summary(scntGrpNrSnvCnt)
+    scntSelGrpSnvRate = sapply(1:length(scntSelGrp), function(x) { scntSelGrpSnvCnt[x] / (max(scntDf[scntSelGrp[[x]], "pos"]) - min(scntDf[scntSelGrp[[x]], "pos"]) + 1) })
+    scntSelGrpSnvRate = unlist(scntSelGrpSnvRate)
 
-    scntGrpSeqs = getSeq(BSgenome.Hsapiens.UCSC.hg19,
-                         GRanges(seqnames = Rle(gsub("(.*)", "chr\\1", rep(scntDf$chrom[1], length(scntGrp)), perl = T)),
-                                 ranges = IRanges(start = scntGrpStartPos, end = scntGrpEndPos),
+    chrL = hg19Df[hg19Df$chrom == scntDf$chrom[1],]$size
+
+    #cppFunction('int sumSampleMutCnt(int grpB, int grpE, int chrL, std::vector< std::string > allSids, List chrScnt, Function f) {
+                #std::vector<int> sMcnts;
+                #for (std::vector< std::string >::iterator it = allSids.begin(); it != allSids.end(); ++it) {
+                    #IntegerVector mutations = f(chrL, chrScnt[*it]);
+                    #int sMcnt = 0;
+                    #for (IntegerVector::iterator it2 = mutations.begin(); it2 != mutations.end(); ++it2) {
+                        #if (*it2 >= grpB && *it2 <= grpE) {
+                            #sMcnt += 1;
+                        #}
+                    #}
+                    #sMcnts.push_back(sMcnt);
+                #}
+                #return(std::accumulate(sMcnts.begin(), sMcnts.end(), 0)); }')
+
+    scntSelGrpPvalues = mclapply(1:length(scntSelGrp),
+                               function(i) {
+                                   grpB = scntSelGrpStartPos[i]
+                                   grpE = scntSelGrpEndPos[i]
+                                   grpL = grpE - grpB + 1
+                                   grpS = scntSelGrpSidCnt[i]
+                                   smpB = grpB - 5e3
+                                   smpE = grpE + 5e3
+                                   smpB = ifelse(smpB < 0, 0, smpB)
+                                   smpE = ifelse(smpE > chrL, chrL, smpE)
+                                   smpL = smpE - smpB + 1
+                                   smpS = length(unique(unlist(sapply(unlist(sapply(subset(scntDf, pos >= smpB & pos <= smpE)$sids,
+                                                                                    function(x) { strsplit(x, ",")[[1]] })),
+                                                                             function(y) { strsplit(y, ";")[[1]] }))))
+                                   lambda = smpS / smpL
+                                   grpPoiP = poisson.test(grpS, lambda * grpL, alternative = "greater")$p.value
+
+                                   #rndS <- foreach(i=1:100000, .combine = c) %dopar% {
+                                       #sum(sapply(allSids,
+                                                  #function(y) {
+                                                      ##smpS = length(grep(y, subset(scntDf, pos >= smpB & pos <= smpE)$sids))
+                                                      ##mutP = sample(c(smpB:smpE), smpS)
+                                                      #mutP = sample.int(chrL, chrScnt[[y]]);
+                                                      #return(length(mutP[mutP >= grpB & mutP <= grpE]) > 0)
+                                                  #}))
+                                   #}
+                                   #table(rndS)
+                                   #hist(rndS)
+                                   #plot(density(rndS))
+
+                                   #system.time(
+                                   #rndS <- foreach(i=1:permNo, .combine = c) %dopar% {
+                                       #sumSampleMutCnt(grpB, grpE, chrL, allSids, chrScnt, sample.int)
+                                   #}
+                                   #)
+
+                                   #rndS <- calcPermMutCnt(permNo, grpB, grpE, chrL, allSids, chrScnt, sample.int)
+                                   #grpPermP = (sum(rndS >= grpS) + 1) / (permNo + 1)
+                                   #grpHp = prod(sapply(allSids, function(y) dhyper(length(grep(y, scntDf[x, "sids"])), grpL, chrL - grpL, chrScnt[[y]])))
+                                   #grpFp = Fisher.test(sapply(allSids, function(y) dhyper(length(grep(y, scntDf[x, "sids"])), grpL, chrL - grpL, chrScnt[[y]])))[2]
+                                   #grpBp = Stouffer.test(sapply(allSids, function(y) dhyper(length(grep(y, scntDf[x, "sids"])), grpL, chrL - grpL, chrScnt[[y]])))[2]
+                                   #cat(sprintf("(%d/%d) Hotspot %s:%d-%d, permutation p-value = %f, multiplied hypergeometric p-value = %f, Fisher's combined hypergeometric p-value = %f, Stouffer's combined p-value = %f\n", 
+                                               #i, length(scntSelGrp), scntDf$chrom[1], grpB, grpE, grpPp, grpHp, grpFp, grpBp))
+                                   cat(sprintf("(%d/%d) Hotspot chr%s:%d-%d, Observed sample count: %d, Poisson p-value = %f\n", i, length(scntSelGrp), scntDf$chrom[1], grpB, grpE, grpS, grpPoiP))
+                                   return(grpPoiP)
+                               }, mc.cores = 12)
+                             
+    scntSelGrpPvalues = unlist(scntSelGrpPvalues)
+    #summary(scntSelGrpPvalues)
+    #hist(scntSelGrpPvalues)
+
+    scntSelGrpFdrs = p.adjust(scntSelGrpPvalues, method = "fdr")
+    #summary(scntSelGrpFdrs)
+    #hist(scntSelGrpFdrs)
+
+    scntSelGrpSeqs = getSeq(BSgenome.Hsapiens.UCSC.hg19,
+                         GRanges(seqnames = Rle(gsub("(.*)", "chr\\1", rep(scntDf$chrom[1], length(scntSelGrp)), perl = T)),
+                                 ranges = IRanges(start = scntSelGrpStartPos, end = scntSelGrpEndPos),
                                  strand = "+"),
                          as.character = T)
 
-    scntGrpNrSnvRef = sapply(1:length(scntGrp), function(x) {
-                                 if (length(scntGrp[[x]]) == 1) {
-                                     return(scntDf[scntGrp[[x]], "ref"])
+    scntSelGrpNrSidRef = sapply(1:length(scntSelGrp), function(x) {
+                                 if (length(scntSelGrp[[x]]) == 1) {
+                                     return(scntDf[scntSelGrp[[x]], "ref"])
                                  } else {
-                                     return(scntGrpSeqs[x])
+                                     return(scntSelGrpSeqs[x])
                                  }
                          })
 
-    scntGrpNrSnvAlt = sapply(1:length(scntGrp), function(x) {
-                                 if (length(scntGrp[[x]]) == 1) {
-                                     return(scntDf[scntGrp[[x]], "alt"])
+    scntSelGrpNrSidAlt = sapply(1:length(scntSelGrp), function(x) {
+                                 if (length(scntSelGrp[[x]]) == 1) {
+                                     return(scntDf[scntSelGrp[[x]], "alt"])
                                  } else {
                                      return("-")
                                  }
                          })
 
-    scntGrpCaddRaw = sapply(1:length(scntGrp), function(x) { mean(as.numeric(sapply(scntDf[x, "cadd_raw"], function(x) strsplit(x, ",", fixed = T)[[1]]))) } )
-    scntGrpCaddPhred = sapply(1:length(scntGrp), function(x) { mean(as.numeric(sapply(scntDf[x, "cadd_phred"], function(x) strsplit(x, ",", fixed = T)[[1]]))) } )
+    scntSelGrpCaddRaw = sapply(1:length(scntSelGrp), function(x) { mean(as.numeric(sapply(scntDf[x, "cadd_raw"], function(x) strsplit(x, ",", fixed = T)[[1]]))) } )
+    scntSelGrpCaddPhred = sapply(1:length(scntSelGrp), function(x) { mean(as.numeric(sapply(scntDf[x, "cadd_phred"], function(x) strsplit(x, ",", fixed = T)[[1]]))) } )
 
-    scntGrpDf = data.frame(space = rep(scntDf[1, "chrom"], length(scntGrp)),
-                           start = scntGrpStartPos,
-                           end = scntGrpEndPos,
-                           width = scntGrpEndPos - scntGrpStartPos + 1,
-                           ref = scntGrpNrSnvRef,
-                           alt = scntGrpNrSnvAlt,
-                           allele = paste(scntGrpNrSnvRef, scntGrpNrSnvAlt, sep = "/"),
+    scntSelGrpDf = data.frame(space = rep(scntDf[1, "chrom"], length(scntSelGrp)),
+                           start = scntSelGrpStartPos,
+                           end = scntSelGrpEndPos,
+                           width = scntSelGrpEndPos - scntSelGrpStartPos + 1,
+                           ref = scntSelGrpNrSidRef,
+                           alt = scntSelGrpNrSidAlt,
+                           allele = paste(scntSelGrpNrSidRef, scntSelGrpNrSidAlt, sep = "/"),
                            strand = "+",
-                           sloci = scntGrpSnvLoci,
-                           rscnt = scntGrpSnvCnt,
-                           nrscnt = scntGrpNrSnvCnt,
-                           rscnt_rate = scntGrpSnvRate,
-                           rscnt_per_sloci = scntGrpSnvCnt / scntGrpSnvLoci,
-                           p_value = scntGrpPvalues,
-                           adj_p_value = scntGrpFdrs,
-                           sids = scntGrpStartSids,
-                           avg_cadd_raw = scntGrpCaddRaw,
-                           avg_cadd_phred = scntGrpCaddPhred)
+                           sloci = scntSelGrpSnvLoci,
+                           rscnt = scntSelGrpSnvCnt,
+                           nrscnt = scntSelGrpSidCnt,
+                           rscnt_rate = scntSelGrpSnvRate,
+                           rscnt_per_sloci = scntSelGrpSnvCnt / scntSelGrpSnvLoci,
+                           p_value = scntSelGrpPvalues,
+                           adj_p_value = scntSelGrpFdrs,
+                           sids = scntSelGrpSids,
+                           avg_cadd_raw = scntSelGrpCaddRaw,
+                           avg_cadd_phred = scntSelGrpCaddPhred)
 
-    scntGrpFile = gsub("scnt", sprintf("hotspot%d", distCut), scntFile)
-    write.table(scntGrpDf, scntGrpFile, row.names = F, col.names = T, sep = "\t", quote = F)
+    scntSelGrpDf.2 = scntSelGrpDf[order(scntSelGrpDf$adj_p_value),]
+    head(scntSelGrpDf.2)
 
-    scntGrpVepDf = scntGrpDf
-    scntGrpVepFile = gsub(sprintf("hotspot%d", distCut), sprintf("hotspot%d.vep_in", distCut), scntGrpFile)
-    write.table(scntGrpVepDf[, c("space", "start", "end", "allele", "strand")],
-                scntGrpVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
+    scntSelGrpFile = gsub("scnt", sprintf("hotspot%d", distCut), scntFile)
+    write.table(scntSelGrpDf, scntSelGrpFile, row.names = F, col.names = T, sep = "\t", quote = F)
 
-    scntGrpVepSigDf = subset(scntGrpVepDf, rscnt_per_sloci >= rscntPerSloci)
-    scntGrpVepSigFile = gsub(sprintf("hotspot%d", distCut), sprintf("hotspot%d.sig%d", distCut, rscntPerSloci), scntGrpVepFile)
-    write.table(scntGrpVepSigDf[, c("space", "start", "end", "allele", "strand")],
-                scntGrpVepSigFile, row.names = F, col.names = F, sep = "\t", quote = F)
+    scntSelGrpVepDf = scntSelGrpDf
+    scntSelGrpVepFile = gsub(sprintf("hotspot%d", distCut), sprintf("hotspot%d.vep_in", distCut), scntSelGrpFile)
+    write.table(scntSelGrpVepDf[, c("space", "start", "end", "allele", "strand")],
+                scntSelGrpVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
+
 }
 
 ##
-hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(panVcfDir, sprintf("*hotspot%d.sig%d.vep_in.txt", distCut, rscntPerSloci))))
-#hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(panVcfDir, sprintf("*hotspot%d.vep_in.txt", distCut))))
+hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(panVcfDir, sprintf("*hotspot%d.vep_in.txt", distCut))))
 
 for (hotspotChrVepSigFile in hotspotChrVepSigFiles) {
     print(hotspotChrVepSigFile)
@@ -269,11 +336,6 @@ for (hotspotChrFile in hotspotChrFiles) {
     hotspotChrDf = read.delim(hotspotChrFile, header = T, as.is = T)
     hotspotChrDf$rscnt_per_sloci = hotspotChrDf$rscnt / hotspotChrDf$sloci
     hotspotDf = rbind(hotspotDf, hotspotChrDf)
-    hotspotChrSigDf = subset(hotspotChrDf, rscnt_per_sloci > 1)
-    hotspotChrSigFile = gsub(sprintf("hotspot%d", distCut), sprintf("hotspot%d.sig%d.vep_in", distCut, rscntPerSloci), hotspotChrFile)
-    #cat(sprintf("Writing %s ...\n", hotspotChrSigFile))
-    #write.table(hotspotChrSigDf[, c("space", "start", "end", "allele", "strand")],
-                #hotspotChrSigFile, row.names = F, col.names = F, sep = "\t", quote = F)
 }
 
 hotspotFile = file.path(panVcfDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.txt", distCut))
