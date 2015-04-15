@@ -46,7 +46,7 @@ Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
     next if lsfout.exist?
     cmd = <<-CMD
 bsub \\
-  -g /gcc/germ/hic \\
+  -g /nd/hic \\
   -q short -W 12:0 \\
   -o #{lsfout} \\
   /opt/R-3.1.2/bin/Rscript #{rscript} #{binSize} #{obsFile} #{normFileA} #{normFileB} #{expFile} #{outFile}

@@ -7,6 +7,7 @@ require(doMC)
 registerDoMC(10)
 
 require(ape)
+require(Hmisc)
 require(proxy)
 require(sqldf)
 require(gdata)
@@ -113,10 +114,10 @@ for (hotspotChrVepSigFile in hotspotChrVepSigFiles) {
     system(sprintf("
 bsub -g /nd/hotspot/vep \\
     -q i2b2_12h -W 12:0 \\
-    -n 10 -R \"span[hosts=1]\" \\
+    -n 4 -R \"span[hosts=1]\" \\
     -o %s \\
     perl /home/sl279/vep/variant_effect_predictor.pl \\
-        --fork 10 \\
+        --fork 4 \\
         --force_overwrite \\
         --offline \\
         --no_stats \\
@@ -182,10 +183,10 @@ bsub -g /nd/hotspot/vep \\
 ##
 # ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/expand_vep_out.rb $f > $f.expanded;done
 
+
 ##
 ## Annotate significant hotspots with VEP output
 ##
-
 hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut, rscntPerSloci))))
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
@@ -197,13 +198,35 @@ for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     hotspotSigVepOutMergedDf = merge(hotspotSigVepOutChrDf, hotspotSigDf, by = c("space", "start", "end"), all.x = TRUE)
     hotspotSigVepOutMergedDf = hotspotSigVepOutMergedDf[order(hotspotSigVepOutMergedDf$all_adj_scnt_p_value),]
     hotspotSigVepMergedOutFile = gsub("vep_out.txt.expanded", "annotated.txt", hotspotSigVepOutChrFile, fixed = T)
+    cat(sprintf("Writing %s ...\n", hotspotSigVepMergedOutFile))
     write.table(hotspotSigVepOutMergedDf, hotspotSigVepMergedOutFile, row.names = F, col.names = T, sep = "\t", quote = F)
 }
 
 
 ##
-## Test mRNA expression changes 
+## Test asssociation between nearby genes
 ##
+
+
+## Load exome mutation data from GDAC
+mafFiles = Sys.glob(file.path(gdacAnlDataDir, "*/*/*/*.maf"))
+mafPanDf = data.frame()
+for (i in 1:length(mafFiles)) {
+    cat(sprintf("Reading %s ...\n", mafFile))
+    mafDf = read.delim(mafFile, header = T, as.is = T)[, c(1:19)]
+    if (i == 1) {
+        mafColNames = colnames(mafDf)
+    } else {
+        colnames(mafDf) = mafColNames
+    }
+    mafDf$Cancer_Type = strsplit(basename(mafFile), "-")[[1]][1]
+    mafPanDf = rbind(mafPanDf, mafDf)
+}
+nonFuncVarClasses = c("Silent")
+mafPanFuncDf = subset(mafPanDf, Variant_Classification %nin% nonFuncVarClasses)
+mafRdata = file.path(gdacAnlDataDir, "mafPanFunc.RData")
+save(mafPanFuncDf, file = mafRdata)
+
 
 ## Load mRNA expression data from GDAC
 rsemFiles = Sys.glob(file.path(gdacStdDataDir, "*/*/*/*RSEM_all.txt"))
@@ -229,9 +252,9 @@ for (i in 1:length(rsemFiles)) {
         rsemLog2FoldPanDf = cbind(rsemLog2FoldPanDf, rsemLog2FoldDf[, grep("__", colnames(rsemLog2FoldDf))])
     }
 }
-
 rsemLog2FoldPanRdata = file.path(gdacStdDataDir, "rsemLog2FoldPan.RData")
 save(rsemLog2FoldPanDf, file = rsemLog2FoldPanRdata)
+
 
 ## Load SCNA data for filter
 cnvByGeneFiles = Sys.glob(file.path(gdacAnlDataDir, "*/*/*/all_data_by_genes.txt"))
@@ -255,15 +278,16 @@ for (i in 1:length(cnvByGeneFiles)) {
 }
 rownames(cnvByGeneDf) = cnvByGeneDf$Gene.Symbol
 cnvByGeneDf$Gene.Symbol = NULL
-
 cnvByGeneRdata = file.path(gdacStdDataDir, "cnvByGene.RData")
 save(cnvByGeneDf, file = cnvByGeneRdata)
 
-## Test association with nearby genes
-# ruby 3.noncodiver-hotspot_association.rb
 
-#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.exptested.txt", distCut))))
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+## Run ruby script for batch jobs
+# ruby 2.noncodiver-hotspot_association.rb
+
+## Collect association results
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.asstested.txt", distCut))))
+#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
 hotspotAnnotDf = data.frame()
 for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))

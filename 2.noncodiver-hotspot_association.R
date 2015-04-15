@@ -1,6 +1,6 @@
 args = commandArgs(TRUE)
 annotFile = args[1]
-annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr10.sanitized.scnt.hotspot100.fdr0.05.vep_out.txt.expanded"
+annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr10.sanitized.scnt.hotspot100.fdr0.05.annotated.txt"
 numCores = 10
 
 ##
@@ -61,6 +61,11 @@ my.wilcox.test.p.value <- function(...) {
   if (is(obj, "try-error")) return(NA) else if (is.nan(obj$p.value)) return(NA) else return(obj$p.value) 
 } 
 
+
+# Load exome SNV/indel data from GDAC
+mafRdata = file.path(gdacAnlDataDir, "mafPanFunc.RData")
+load(mafRdata)
+
 ## Load mRNA expression data from GDAC
 rsemLog2FoldPanRdata = file.path(gdacStdDataDir, "rsemLog2FoldPan.RData")
 load(rsemLog2FoldPanRdata)
@@ -71,8 +76,16 @@ load(cnvByGeneRdata)
 
 ## Load hotspot data
 annotDf = read.delim(annotFile, header = T, as.is = T)
+#nrow(annotDf)
+#names(annotDf)
 
-## Check association based on HiC-like data
+annotDf$allele = NULL
+annotDf$strand = NULL
+annotGrpDf = sqldf('SELECT *, group_concat(SYMBOL) AS SYMBOLS FROM annotDf GROUP BY Location')
+#nrow(annotGrpDf)
+#head(annotGrpDf)
+
+## Expand gene sets and check associations
 assColNames = c("distalDhsToPromoterDhs",
                 "dhsToGeneExpression",
                 "fantom5EnhancerTssAssociations",
@@ -85,6 +98,32 @@ assColNames = c("distalDhsToPromoterDhs",
                 "insitu_HiC_K562_100kb_intra_MAPQGE30_100kb_SQRTVC",
                 "insitu_HiC_KBM7_100kb_intra_MAPQGE30_100kb_SQRTVC",
                 "insitu_HiC_NHEK_100kb_intra_MAPQGE30_100kb_SQRTVC")
+
+assGenesByLocLst = list()
+for (i in 1:nrow(annotGrpDf)) {
+    knownGenes = unique(strsplit(annotGrpDf[i,]$SYMBOLS, ",")[[1]], na.rm = T)
+    knownGenes = knownGenes[knownGenes != ""]
+    newGenes = c()
+    for (assColName in assColNames) {
+        if (grepl("four", assColName)) {
+            suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
+                                                    function(x) strsplit(x, "_", fixed = T)[[1]][4]),
+                                             function(y) strsplit(y, "|", fixed = T)[[1]])))
+            suppGenes = suppGenes[suppGenes != "NA"]
+        } else if (grepl("insitu", assColName)) {
+            suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
+                                                    function(x) strsplit(x, "_", fixed = T)[[1]][7]),
+                                             function(y) strsplit(y, "|", fixed = T)[[1]])))
+            suppGenes = suppGenes[suppGenes != "NA"]
+        } else {
+            suppGenes = unique(strsplit(annotGrpDf[i, assColName], ",")[[1]])
+        }
+        newGenes = c(newGenes, suppGenes)
+    }
+    newGenes = unique(newGenes)
+    assGenes = unique(c(knownGenes, newGenes))
+    assGenesByLocLst[[annotGrpDf[i,]$Location]] = assGenes
+}
 
 for (i in 1:nrow(annotDf)) {
     gene = annotDf[i,]$SYMBOL
@@ -105,72 +144,74 @@ for (i in 1:nrow(annotDf)) {
 annotDf[is.na(annotDf$supported_by), "supported_by"] = ""
 
 
-## Test significance of expression changes of nearby genes
+## Test significance of expression changes of nearby genes and mutual exclusivity with other somatic mutations
+assDf = data.frame()
+for (i = 1:nrow(annotGrpDf)) {
+    hotspotName = paste("chr", annotGrpDf[i, "Location"], sep = "")
+    cat(sprintf("Processing %d of %d ...\n", i, nrow(annotGrpDf)))
+    assGenes = assGenesByLocLst[[annotGrpDf[i, "Location"]]]
 
-expTestedDf <- foreach (i=1:nrow(annotDf), .combine=rbind) %dopar% {
-    hotspotName = sprintf("%s_%s_%s",
-                          annotDf[i, "space"],
-                          annotDf[i, "start"], 
-                          annotDf[i, "end"])
-    cat(sprintf("Processing %d of %d ...\n", i, nrow(annotDf)))
-    geneName = annotDf[i, "SYMBOL"]
-    cnvByGeneGeneDf = cnvByGeneDf[geneName,]
-    if (!all(is.na(cnvByGeneGeneDf)) & nrow(cnvByGeneGeneDf) > 0) {
-        cpids = colnames(cnvByGeneGeneDf[, cnvByGeneGeneDf > 0.3 | cnvByGeneGeneDf < -0.3])
-    } else {
-        cpids = c()
-    }
-    rsemLog2FoldGeneDf = subset(rsemLog2FoldPanDf, symbol == geneName)
-    if (nrow(rsemLog2FoldGeneDf) > 0) {
-        mpids = as.vector(sapply(strsplit(annotDf[i, "sids"], ",", fixed = T)[[1]],
-                                function(x) { 
-                                    elems = strsplit(x, "-", fixed = T)[[1]][2:4]
-                                    elems[3] = substring(elems[3], 1, 2)
-                                    paste(elems, collapse = "__")
-                                }))
-        epids = grep("__", names(rsemLog2FoldPanDf), value = T)
-        wepids = setdiff(setdiff(epids, mpids), cpids)
-        mepids = intersect(mpids, epids)
-        rsemLog2FoldGeneMt = as.numeric(as.vector(rsemLog2FoldGeneDf[, mepids]))
-        rsemLog2FoldGeneWt = as.numeric(as.vector(rsemLog2FoldGeneDf[, wepids]))
-        ttPvalueGeneLog2FoldExpMutVsWdt = my.t.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
-        wtPvalueGeneLog2FoldExpMutVsWdt = my.wilcox.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
-        annotDf[i, "ttPvalueGeneLog2FoldExpMutVsWdt"] = ttPvalueGeneLog2FoldExpMutVsWdt
-        annotDf[i, "wtPvalueGeneLog2FoldExpMutVsWdt"] = wtPvalueGeneLog2FoldExpMutVsWdt
-        if (!is.na(ttPvalueGeneLog2FoldExpMutVsWdt) & !is.na(wtPvalueGeneLog2FoldExpMutVsWdt)) {
-            if (ttPvalueGeneLog2FoldExpMutVsWdt <= 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt <= 0.05) {
-                cat(sprintf("Found a significant expression change of %s in %s mutant group!\n", geneName, hotspotName))
-                geneLog2FoldExpMutVsWdtDf = data.frame()
-                geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("MT", length(mepids)), log2FoldRsem = rsemLog2FoldGeneMt))
-                geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(wepids)), log2FoldRsem = rsemLog2FoldGeneWt))
-                p = ggplot(geneLog2FoldExpMutVsWdtDf, aes(factor(type), log2FoldRsem)) +
-                    geom_boxplot() + 
-                    theme(plot.title   = element_text(size = baseFontSize + 2, face="bold"),
-                        axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
-                        axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
-                        axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
-                        axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
-                        panel.grid.major = element_blank(),
-                        panel.grid.minor = element_blank(),
-                        panel.background = element_rect(color = "black", fill="white"),
-                        legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
-                        legend.text  = element_text(size = baseFontSize, family="sans"),
-                        legend.direction = "horizontal",
-                        legend.position = "bottom"
-                        ) +
-                    scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f", wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
-                    scale_y_continuous(name = sprintf("Log2 fold change of %s expression\n", geneName))
-                mutVsWdtExpPlotFile = file.path(figDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, geneName))
-                ggsave(filename = mutVsWdtExpPlotFile, plot = p, width = 5, height = 6)
-            }
+    assGrpDf <- foreach (assGene=assGenes) %dopar% {
+        cnvByGeneGeneDf = cnvByGeneDf[assGene,]
+        if (!all(is.na(cnvByGeneGeneDf)) & nrow(cnvByGeneGeneDf) > 0) {
+            cpids = colnames(cnvByGeneGeneDf[, cnvByGeneGeneDf > 0.3 | cnvByGeneGeneDf < -0.3])
+        } else {
+            cpids = c()
         }
-    } else {
-        annotDf[i, "ttPvalueGeneLog2FoldExpMutVsWdt"] = NA
-        annotDf[i, "wtPvalueGeneLog2FoldExpMutVsWdt"] = NA
+        rsemLog2FoldGeneDf = subset(rsemLog2FoldPanDf, symbol == assGene)
+        if (nrow(rsemLog2FoldGeneDf) > 0) {
+            mpids = as.vector(sapply(strsplit(annotGrpDf[i, "sids"], ",", fixed = T)[[1]],
+                                    function(x) { 
+                                        elems = strsplit(x, "-", fixed = T)[[1]][2:4]
+                                        elems[3] = substring(elems[3], 1, 2)
+                                        paste(elems, collapse = "__")
+                                    }))
+            epids = grep("__", names(rsemLog2FoldPanDf), value = T)
+            wepids = setdiff(setdiff(epids, mpids), cpids)
+            mepids = intersect(mpids, epids)
+            rsemLog2FoldGeneMt = as.numeric(as.vector(rsemLog2FoldGeneDf[, mepids]))
+            rsemLog2FoldGeneWt = as.numeric(as.vector(rsemLog2FoldGeneDf[, wepids]))
+            ttPvalueGeneLog2FoldExpMutVsWdt = my.t.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
+            wtPvalueGeneLog2FoldExpMutVsWdt = my.wilcox.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
+            if (!is.na(ttPvalueGeneLog2FoldExpMutVsWdt) & !is.na(wtPvalueGeneLog2FoldExpMutVsWdt)) {
+                if (ttPvalueGeneLog2FoldExpMutVsWdt <= 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt <= 0.05) {
+                    cat(sprintf("Found a significant expression change of %s in %s mutant group!\n", assGene, hotspotName))
+                    geneLog2FoldExpMutVsWdtDf = data.frame()
+                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("MT", length(mepids)), log2FoldRsem = rsemLog2FoldGeneMt))
+                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(wepids)), log2FoldRsem = rsemLog2FoldGeneWt))
+                    p = ggplot(geneLog2FoldExpMutVsWdtDf, aes(factor(type), log2FoldRsem)) +
+                        geom_boxplot() + 
+                        theme(plot.title   = element_text(size = baseFontSize + 2, face="bold"),
+                            axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+                            axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+                            axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
+                            axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+                            panel.grid.major = element_blank(),
+                            panel.grid.minor = element_blank(),
+                            panel.background = element_rect(color = "black", fill="white"),
+                            legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+                            legend.text  = element_text(size = baseFontSize, family="sans"),
+                            legend.direction = "horizontal",
+                            legend.position = "bottom") +
+                        scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f", wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
+                        scale_y_continuous(name = sprintf("Log2 fold change of %s expression\n", assGene))
+                    mutVsWdtExpPlotFile = file.path(figDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, assGene))
+                    ggsave(filename = mutVsWdtExpPlotFile, plot = p, width = 5, height = 6)
+                }
+            }
+        } else {
+            ttPvalueGeneLog2FoldExpMutVsWdt = NA
+            wtPvalueGeneLog2FoldExpMutVsWdt = NA
+        }
+
+        return(data.frame(Location = annotGrpDf[i,]$Location,
+                          SYMBOL = assGene,
+                          ttPvalueGeneLog2FoldExpMutVsWdt = ttPvalueGeneLog2FoldExpMutVsWdt,
+                          wtPvalueGeneLog2FoldExpMutVsWdt = wtPvalueGeneLog2FoldExpMutVsWdt))
     }
-    annotDf[i,]
+    assDf = rbind(assDf, assGrpDf)
 }
 
-expTestedFile = gsub("annotated.txt", "annotated.exptested.txt", annotFile, fixed = T)
+assFile = gsub("annotated.txt", "annotated.asstested.txt", annotFile, fixed = T)
 write.table(expTestedDf, expTestedFile, row.names = F, col.names = T, sep = "\t", quote = F)
 
