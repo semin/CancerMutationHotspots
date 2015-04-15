@@ -2,7 +2,8 @@
 
 require 'pathname'
 
-distCut = 100
+distCut = 50
+hotspotMargin = 25
 poisMargin = 5000
 numCores = 10
 baseDir = Pathname.new "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver"
@@ -19,7 +20,7 @@ scntFiles.each do |scntFile|
         -q i2b2_1d -n #{numCores} \\
         -R "span[hosts=1]" \\
         -o #{lsfout} \\
-        xvfb-run -a /opt/R-3.1.2/bin/Rscript #{rScript} #{scntFile} #{hotspotFile} #{hotspotVepFile} #{distCut} #{poisMargin} #{numCores}
+        xvfb-run -a /opt/R-3.1.2/bin/Rscript #{rScript} #{scntFile} #{hotspotFile} #{hotspotVepFile} #{distCut} #{hotspotMargin} #{poisMargin} #{numCores}
   CMD
   system cmd
 end

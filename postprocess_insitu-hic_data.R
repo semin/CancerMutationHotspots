@@ -47,7 +47,7 @@ targetGrA = sort(GRanges(seqnames = Rle(ichrs[1]),
                    strand = "*"))
 geneHitsA = findOverlaps(targetGrA, refGeneGr)
 for(i in unique(queryHits(geneHitsA))) {
-    values(targetGrA)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsA[queryHits(geneHitsA) == i])]$symbol), collapse = ",")
+    values(targetGrA)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsA[queryHits(geneHitsA) == i])]$symbol), collapse = "|")
 }
 targetDfA = as.data.frame(targetGrA)
 
@@ -56,7 +56,7 @@ targetGrB = sort(GRanges(seqnames = Rle(ichrs[length(ichrs)]),
                    strand = "*"))
 geneHitsB = findOverlaps(targetGrB, refGeneGr)
 for(i in unique(queryHits(geneHitsB))) {
-    values(targetGrB)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsB[queryHits(geneHitsB) == i])]$symbol), collapse = ",")
+    values(targetGrB)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsB[queryHits(geneHitsB) == i])]$symbol), collapse = "|")
 }
 targetDfB = as.data.frame(targetGrB)
 
@@ -74,8 +74,9 @@ obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, symbolsA, o.chrB, o.startB, o.en
               FROM obsDf AS o
               LEFT JOIN targetDfB AS t
               ON o.chrB = t.seqnames AND o.startB = t.start AND o.endB = t.end')
-bedDf = with(obsDf, rbind(data.frame(space = chrA, start = startA, end = endA, partner = paste(chrB, startB, endB, c, nc, loe, symbolsB, sep = "_")),
-                          data.frame(space = chrB, start = startB, end = endB, partner = paste(chrA, startA, endA, c, nc, loe, symbolsA, sep = "_"))))
+obsSigDf = obsDf[obsDf$nc > as.numeric(quantile(obsDf$nc, 0.95, na.rm = T)),]
+bedDf = with(obsSigDf, rbind(data.frame(space = chrA, start = startA, end = endA, partner = paste(chrB, startB, endB, c, nc, loe, symbolsB, sep = "_")),
+                             data.frame(space = chrB, start = startB, end = endB, partner = paste(chrA, startA, endA, c, nc, loe, symbolsA, sep = "_"))))
 bedDf = with(bedDf, bedDf[order(space, start, end),])
 write.table(bedDf, outFile, sep = "\t", row.names=F, col.names=F, quote=FALSE)
 

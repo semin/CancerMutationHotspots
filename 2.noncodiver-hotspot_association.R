@@ -1,5 +1,6 @@
 args = commandArgs(TRUE)
 annotFile = args[1]
+annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr10.sanitized.scnt.hotspot100.fdr0.05.vep_out.txt.expanded"
 numCores = 10
 
 ##
@@ -14,10 +15,9 @@ require(gtools)
 require(ggplot2)
 require(annotate)
 require(snpStats)
-require(data.table)
 require(Biostrings)
-require(GenomicRanges)
 require(org.Hs.eg.db)
+require(GenomicRanges)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
 
@@ -69,8 +69,44 @@ load(rsemLog2FoldPanRdata)
 cnvByGeneRdata = file.path(gdacStdDataDir, "cnvByGene.RData")
 load(cnvByGeneRdata)
 
-## Test significance of expression changes of nearby genes
+## Load hotspot data
 annotDf = read.delim(annotFile, header = T, as.is = T)
+
+## Check association based on HiC-like data
+assColNames = c("distalDhsToPromoterDhs",
+                "dhsToGeneExpression",
+                "fantom5EnhancerTssAssociations",
+                "allDbSuperEnhancerGeneAssociations",
+                "fourDGenomeHomoSapiens", 
+                "insitu_HiC_GM12878_100kb_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_HMEC_100kb_intra_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_HUVEC_100kb_intra_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_IMR90_100kb_intra_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_K562_100kb_intra_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_KBM7_100kb_intra_MAPQGE30_100kb_SQRTVC",
+                "insitu_HiC_NHEK_100kb_intra_MAPQGE30_100kb_SQRTVC")
+
+for (i in 1:nrow(annotDf)) {
+    gene = annotDf[i,]$SYMBOL
+    if (gene == "") {
+        next
+    } else {
+        suppColNames = c()
+        for (assColName in assColNames) {
+            if (grepl(gene, annotDf[i, assColName], fixed = T)) {
+                cat(sprintf("Association between hotspot (%s) and %s is supported by %s\n",
+                            annotDf[i, "Location"], gene, assColName))
+                suppColNames = c(suppColNames, assColName)
+            }
+        }
+        annotDf[i, "supported_by"] = paste(suppColNames, collapse = ";")
+    }
+}
+annotDf[is.na(annotDf$supported_by), "supported_by"] = ""
+
+
+## Test significance of expression changes of nearby genes
+
 expTestedDf <- foreach (i=1:nrow(annotDf), .combine=rbind) %dopar% {
     hotspotName = sprintf("%s_%s_%s",
                           annotDf[i, "space"],

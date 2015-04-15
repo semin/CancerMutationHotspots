@@ -6,17 +6,20 @@ rm(list=ls())
 require(doMC)
 registerDoMC(10)
 
+require(ape)
 require(proxy)
 require(sqldf)
 require(gdata)
 require(gtools)
+require(gplots)
 require(ggplot2)
 require(annotate)
 require(snpStats)
 require(data.table)
 require(Biostrings)
-require(GenomicRanges)
 require(org.Hs.eg.db)
+require(GenomicRanges)
+require(VariantAnnotation)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
 
@@ -32,6 +35,7 @@ gdacDir = file.path(baseDir, "gdac")
 gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
+circosDir = file.path(baseDir, "circos")
 imageFile = file.path(baseDir, "script/0.noncodiver-control_tower.RData")
 
 chrs = c(1:22, "X", "Y")
@@ -67,11 +71,11 @@ for (hotspotChrFile in hotspotChrFiles) {
 hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr")
 hotspotDf = hotspotDf[order(hotspotDf$all_adj_scnt_p_value),]
 
-head(hotspotDf)
-summary(hotspotDf$width)
-hist(hotspotDf$width)
-summary(hotspotDf$all_adj_scnt_p_value)
-hist(hotspotDf$all_adj_scnt_p_value)
+#head(hotspotDf)
+#summary(hotspotDf$width)
+#hist(hotspotDf$width)
+#summary(hotspotDf$all_adj_scnt_p_value)
+#hist(hotspotDf$all_adj_scnt_p_value)
 
 #hotspotFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.scnt.hotspot%d.txt", distCut))
 #write.table(hotspotDf, hotspotFile, row.names = F, col.names = T, sep = "\t", quote = F)
@@ -82,9 +86,9 @@ hist(hotspotDf$all_adj_scnt_p_value)
 ##
 
 hotspotSigDf = subset(hotspotDf, all_adj_scnt_p_value < 0.05)
-nrow(hotspotSigDf)
-summary(hotspotSigDf$width)
-hist(hotspotSigDf$width)
+#nrow(hotspotSigDf)
+#summary(hotspotSigDf$all_adj_scnt_p_value)
+#hist(hotspotSigDf$width)
 
 for (chr in chrs) {
     chr = as.character(chr)
@@ -103,9 +107,9 @@ for (chr in chrs) {
 ##
 hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*hotspot%d.fdr0.05.vep_in.txt", distCut))))
 for (hotspotChrVepSigFile in hotspotChrVepSigFiles) {
-    print(hotspotChrVepSigFile)
     hotspotChrVepSigOutFile = gsub("vep_in", "vep_out", hotspotChrVepSigFile)
     hotspotChrVepSigLsfOutFile = gsub("txt", "lsfout", hotspotChrVepSigOutFile)
+    if (file.exists(hotspotChrVepSigLsfOutFile)) next
     system(sprintf("
 bsub -g /nd/hotspot/vep \\
     -q i2b2_12h -W 12:0 \\
@@ -149,7 +153,7 @@ bsub -g /nd/hotspot/vep \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/roadmap/dnase/roadmapDnaseProm.bed.gz,roadmapDnaseProm,bed,overlap,0 \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeRegTfbsClusteredWithCellsV3.bed.gz,wgEncodeRegTfbsClusteredWithCellsV3,bed,overlap,0 \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedGm12878.bed.gz,wgEncodeAwgSegmentationCombinedGm12878,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedH1hesc.bed.gz,wgEncodeAwgSegmentationChromhmmH1hesc,bed,overlap,0 \\
+        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedH1hesc.bed.gz,wgEncodeAwgSegmentationCombinedH1hesc,bed,overlap,0 \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHelas3.bed.gz,wgEncodeAwgSegmentationCombinedHelas3,bed,overlap,0 \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHepg2.bed.gz,wgEncodeAwgSegmentationCombinedHepg2,bed,overlap,0 \\
         --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHuvec.bed.gz,wgEncodeAwgSegmentationCombinedHuvec,bed,overlap,0 \\
@@ -255,11 +259,11 @@ cnvByGeneDf$Gene.Symbol = NULL
 cnvByGeneRdata = file.path(gdacStdDataDir, "cnvByGene.RData")
 save(cnvByGeneDf, file = cnvByGeneRdata)
 
+## Test association with nearby genes
+# ruby 3.noncodiver-hotspot_association.rb
 
-## Test significance of expression changes of nearby genes
-# ruby 3.noncodiver-hotspot_impact_on_expression.rb
-
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*.hotspot%d.fdr0.05.annotated.exptested.txt", distCut))))
+#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.exptested.txt", distCut))))
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
 hotspotAnnotDf = data.frame()
 for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))
@@ -267,7 +271,72 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     hotspotAnnotDf = rbind(hotspotAnnotDf, hotspotAnnotChrDf)
 }
 hotspotAnnotDf = hotspotAnnotDf[order(hotspotAnnotDf$all_adj_scnt_p_value),]
-hotspotAnnotDf = hotspotAnnotDf[hotspotAnnotDf$all_adj_scnt_p_value < 0.01,]
+hotspotAnnotSigDf = hotspotAnnotDf[hotspotAnnotDf$all_adj_scnt_p_value < 0.01,]
+
+
+##
+## Add cancer distribution information
+##
+vcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
+sampleIdsByCancerLst = list()
+sampleIdToCancerDf = data.frame()
+for (vcfFile in vcfFiles) {
+    canerType = basename(dirname(vcfFile))
+    sampleIds = samples(scanVcfHeader(vcfFile))
+    sampleIdsByCancerLst[[canerType]] = sampleIds
+    for (sampleId in sampleIds) {
+        sampleIdToCancerDf = rbind(sampleIdToCancerDf, data.frame(id = sampleId, cancer = cancerType))
+    }
+}
+
+hotspotAnnotSigDf$allele = NULL
+hotspotAnnotSigDf$strand = NULL
+hotspotAnnotSigGrpDf = sqldf('SELECT space, start, end, sids, all_adj_scnt_p_value FROM hotspotAnnotSigDf GROUP BY space, start, end ORDER BY space, start, end')
+
+for (i in 1:nrow(hotspotAnnotSigGrpDf)) {
+    sampleIds = strsplit(hotspotAnnotSigGrpDf[i, "sids"], ",")[[1]]
+    for (c in names(sampleIdsByCancerLst)) {
+        hotspotAnnotSigGrpDf[i, c] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
+    }
+}
+
+hotspotAnnotSigGrpDf = hotspotAnnotSigGrpDf[order(hotspotAnnotSigGrpDf$all_adj_scnt_p_value),]
+head(hotspotAnnotSigGrpDf)
+
+sampleHotspotMutProfileDf <- foreach(sampleId=unlist(sampleIdsByCancerLst), .combine = rbind) %dopar% {
+    print(sampleId)
+    sapply(1:nrow(hotspotAnnotSigGrpDf), function(x) as.integer(grepl(sampleId, hotspotAnnotSigGrpDf[x,]$sids)))
+}
+
+head(sampleHotspotMutProfileDf)
+rownames(sampleHotspotMutProfileDf) = unlist(sampleIdsByCancerLst)
+sampleHotspotMutProfileDist = dist(sampleHotspotMutProfileDf)
+sampleHotspotMutProfileHc = hclust(sampleHotspotMutProfileDist)
+#plot(sampleHotspotMutProfileHc)
+
+hclustfunc <- function(x) hclust(x, method="complete")
+distfunc <- function(x) dist(x, method="euclidean")
+
+heatmap.2(as.matrix(sampleHotspotMutProfileDf),
+          hclustfun=hclustfunc, distfun=distfunc,
+          col = c("#FFFFFF", "#FF0000"),
+          scale="none",
+          trace="none",
+          density.info="none",
+          dendrogram = "both",
+          labRow = "", labCol = "",
+          Rowv = TRUE, Colv = TRUE)
+
+#hotspotCancerProfileDf = hotspotAnnotSigGrpDf[, names(sampleIdsByCancerLst)]
+#hotspotCancerProfileDf.2 = t(hotspotCancerProfileDf)
+#hotspotCancerProfileDf.2.dist = dist(hotspotCancerProfileDf.2)
+#hotspotCancerProfileDf.2.hc = hclust(hotspotCancerProfileDf.2.dist, method="complete")
+#plot(hotspotCancerProfileDf.2.hc)
+#plot(as.phylo(hotspotCancerProfileDf.2.hc), type='fan', label.offset=0.1, no.margin=TRUE)
+
+#hotspotAnnotSigNewDf = merge(hotspotAnnotSigDf, hotspotAnnotSigGrpDf, by = c("space", "start", "end", "sids"), all.x = T)
+#hotspotAnnotSigNewDf = hotspotAnnotSigNewDf[order(hotspotAnnotSigNewDf$all_adj_scnt_p_value),]
+
 
 
 ##
@@ -275,23 +344,23 @@ hotspotAnnotDf = hotspotAnnotDf[hotspotAnnotDf$all_adj_scnt_p_value < 0.01,]
 ##
 allOncoFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/allonco/allonco_20130923.tsv")
 allOncoDf = read.delim(allOncoFile, header = T, as.is = T)
-hotspotAnnotDf$allOnco = ifelse(hotspotAnnotDf$SYMBOL %in% allOncoDf$symbol, "Y", "N")
+hotspotAnnotSigDf$allOnco = ifelse(hotspotAnnotSigDf$SYMBOL %in% allOncoDf$symbol, "Y", "N")
 
 intogenDriverSignalFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/intogen/Mutational_drivers_signals.tsv")
 intogenDriverSignalDf = read.delim(intogenDriverSignalFile, header = T, as.is = T, comment.char = "#")
-hotspotAnnotDf$intogenDriverSignals = ifelse(hotspotAnnotDf$SYMBOL %in% intogenDriverSignalDf$geneHGNCsymbol, "Y", "N")
+hotspotAnnotSigDf$intogenDriverSignals = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverSignalDf$geneHGNCsymbol, "Y", "N")
 
 intogenDriverFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/intogen/Drivers_type_role.tsv")
 intogenDriverDf = read.delim(intogenDriverFile, header = T, as.is = T, comment.char = "#")
-hotspotAnnotDf$intogenDrivers = ifelse(hotspotAnnotDf$SYMBOL %in% intogenDriverDf$geneHGNCsymbol, "Y", "N")
+hotspotAnnotSigDf$intogenDrivers = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverDf$geneHGNCsymbol, "Y", "N")
 
 cgcFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/cosmic/cancer_gene_census.csv")
 cgcDf = read.csv(cgcFile, header = T, as.is = T)
-hotspotAnnotDf$cosmic = ifelse(hotspotAnnotDf$SYMBOL %in% cgcDf$Gene.Symbol, "Y", "N")
+hotspotAnnotSigDf$cosmic = ifelse(hotspotAnnotSigDf$SYMBOL %in% cgcDf$Gene.Symbol, "Y", "N")
 
 tcgaSmgFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/tcga-pancan/hcd.txt")
 tcgaSmgDf = read.delim(tcgaSmgFile, header = T, as.is = T)
-hotspotAnnotDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotDf$SYMBOL %in% tcgaSmgDf$Gene.Symbol, "Y", "N")
+hotspotAnnotSigDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotSigDf$SYMBOL %in% tcgaSmgDf$Gene.Symbol, "Y", "N")
 
 
 ##
@@ -302,8 +371,65 @@ hotspotAnnotDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotDf$SYMBOL %in% tcgaSmgDf$Gen
 ##
 ## Save results!
 ##
-
-hotspotAnnotDf$X4dGenomeHomoSapiens = NULL
 hotspotAnnotFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.fdr0.01.annotated.txt", distCut))
-write.table(hotspotAnnotDf, hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
+write.table(hotspotAnnotSigDf, hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
 save.image(imageFile)
+load(imageFile)
+
+
+##
+## Plot linear genome-wide distribution of hotspots
+##
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr**.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotAnnotGrpDf = data.frame()
+for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
+    cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))
+    hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
+    hotspotAnnotChrDf$allele = NULL
+    hotspotAnnotChrDf$strand = NULL
+    hotspotAnnotChrGrpDf = sqldf('SELECT space, start, end, chr_adj_scnt_p_value, wgEncodeAwgSegmentationCombinedGm12878 AS state FROM hotspotAnnotChrDf GROUP BY space, start, end ORDER BY space, start, end')
+    hotspotAnnotChrGrpDf$log10Qvalue = -log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value)
+    hotspotAnnotChrGrpDf$label = ifelse(hotspotAnnotChrGrpDf$log10Qvalue > 3,
+                                        sprintf("chr%s:%d-%d:%s", hotspotAnnotChrGrpDf$space, hotspotAnnotChrGrpDf$start, hotspotAnnotChrGrpDf$end, hotspotAnnotChrGrpDf$state), "")
+    hotspotAnnotGrpDf = rbind(hotspotAnnotGrpDf, hotspotAnnotChrGrpDf)
+    baseFontSize = 15
+    breakSize = 10^7 * 2
+    yBy = ceiling(max(-log10(hotspotAnnotChrDf$chr_adj_scnt_p_value)) / 5)
+    p = ggplot(hotspotAnnotChrGrpDf, aes(x = start, y = -log10(chr_adj_scnt_p_value))) + 
+        geom_hline(yintercept = seq(1, max(-log10(hotspotAnnotChrDf$chr_adj_scnt_p_value) + yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
+        geom_point(colour = "red", size = 2) + 
+        #geom_line(colour = "grey") + 
+        geom_text(aes(x = start, y = -log10(chr_adj_scnt_p_value), label = label, angle = 30, hjust = -0.03, vjust = -0.03, size = 9)) +
+        theme(axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+              axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+              axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", hjust=1),
+              axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_rect(color = "black", fill="white"),
+              legend.title = element_text(size = baseFontSize - 2, face="plain", family="sans", hjust = 0),
+              legend.text  = element_text(size = baseFontSize - 2, face="plain", family="sans"),
+              legend.direction = "horizontal",
+              legend.position = "none") +
+        scale_x_continuous(name=paste("\nGenomic position on chromosome ", hotspotAnnotChrGrpDf$space[1], " (Mb)", sep=""),
+                           breaks=seq(1, max(hotspotAnnotChrGrpDf$end), by=breakSize),
+                           limits=c(1, max(hotspotAnnotChrGrpDf$end) + breakSize),
+                           labels=as.integer(seq(0, max(hotspotAnnotChrGrpDf$end), by=breakSize)/10^6)) +
+        scale_y_continuous(name = "Significance of hotspot recurrence (-log10(P)) \n",
+                           breaks=seq(1, max(-log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value) + yBy), by=yBy),
+                           limits=c(1, max(-log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value) + 2*yBy)))
+    hotspotAnnotChrGrpFile = gsub(".txt", ".pdf", hotspotAnnotChrFile, fixed = T)
+    ggsave(filename = hotspotAnnotChrGrpFile, plot = p, width = 17, height = 6)
+}
+
+
+##
+## Gernerate circos plot input data (hotspot p-values and labels)
+##
+circosLogPDf = hotspotAnnotGrpDf
+circosLogPDf$logp = log10(circosLogPDf[,4])
+circosLogPDf$space = paste("hs", circosLogPDf$space, sep = "")
+circosLogPFile = file.path(circosDir, "hotspot.logp")
+write.table(circosLogPDf[, c("space", "start", "end", "logp")], circosLogPFile, row.names = F, col.names = F, sep = "\t", quote = F)
+circosLabelFile = file.path(circosDir, "hotspot.label")
+write.table(subset(circosLogPDf, logp < -4)[, c("space", "start", "end", "label")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)

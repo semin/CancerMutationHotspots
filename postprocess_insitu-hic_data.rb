@@ -6,7 +6,6 @@ require 'parallel'
 rscript = Pathname.new("/home/sl279/BiO/Research/NoncoDiver/script/postprocess_insitu-hic_data.R")
 obsFiles = Pathname.glob("/home/sl279/BiO/Research/NoncoDiver/insitu-hic/*/100kb*/*/MAPQGE30/*.RAWobserved")
 Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
-#obsFiles.each do |obsFile|
   #"chr1_10kb.RAWobserved"
   #"chr10_11_100kb.RAWobserved"
   chr, binPrefix, binPostfix = $1, $2, $3 if obsFile.basename.to_s =~ /(.*)\_(\d+)(\w+)b\.RAWobserved/

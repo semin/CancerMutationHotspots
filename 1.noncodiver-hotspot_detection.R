@@ -3,8 +3,9 @@ scntFile = args[1]
 scntSelGrpFile = args[2]
 scntSelGrpVepFile = args[3]
 distCut = as.integer(args[4])
-poisMargin = as.integer(args[5])
-numCores = as.integer(args[6])
+hotspotMargin = as.integer(args[5])
+poisMargin = as.integer(args[6])
+numCores = as.integer(args[7])
 
 #scntFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr5.sanitized.scnt.txt"
 #scntSelGrpFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr5.sanitized.scnt.hotspot100.txt"
@@ -36,7 +37,6 @@ chrs = c(1:22, "X", "Y")
 chrs = factor(chrs, level=chrs)
 cchrs = sapply(chrs, function(x) paste("chr", x, sep=""))
 cchrs = factor(cchrs, level=cchrs)
-hotspotMargin = 50
 
 # Load chrom size information
 hg19File = file.path(baseDir, "ucsc/database/hg19.genome")
