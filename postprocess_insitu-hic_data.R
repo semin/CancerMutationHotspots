@@ -79,6 +79,6 @@ obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, symbolsA, o.chrB, o.startB, o.en
 obsSigDf = obsDf[obsDf$c > as.numeric(quantile(obsDf$c, 0.95)),]
 bedDf = with(obsSigDf, rbind(data.frame(space = chrA, start = startA, end = endA, partner = paste(chrB, startB, endB, c, nc, loe, symbolsB, sep = "_")),
                              data.frame(space = chrB, start = startB, end = endB, partner = paste(chrA, startA, endA, c, nc, loe, symbolsA, sep = "_"))))
-bedGrpDf = sqldf('SELECT * GROUP BY space, start, end ORDER BY space, start, end ASC')
+bedGrpDf = sqldf('SELECT * FROM bedDf GROUP BY space, start, end, partner ORDER BY space, start, end, partner ASC')
 write.table(bedGrpDf, outFile, sep = "\t", row.names=F, col.names=F, quote=FALSE)
 

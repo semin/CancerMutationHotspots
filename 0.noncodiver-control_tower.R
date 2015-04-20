@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(10)
+registerDoMC(5)
 
 require(ape)
 require(Hmisc)
@@ -29,6 +29,10 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 ##
 rootDir = "/home/sl279"
 baseDir = file.path(rootDir, "BiO/Research/NoncoDiver")
+imageFile = file.path(baseDir, "script/0.noncodiver-control_tower.RData")
+#save.image(imageFile)
+#load(imageFile)
+
 vcfDir = file.path(baseDir, "vcf")
 hotspotDir = file.path(vcfDir, "pancan")
 hotspotDir = file.path(baseDir, "hotspot")
@@ -37,7 +41,6 @@ gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
 circosDir = file.path(baseDir, "circos")
-imageFile = file.path(baseDir, "script/0.noncodiver-control_tower.RData")
 
 chrs = c(1:22, "X", "Y")
 chrs = factor(chrs, level=chrs)
@@ -45,7 +48,7 @@ cchrs = sapply(chrs, function(x) paste("chr", x, sep=""))
 cchrs = factor(cchrs, level=cchrs)
 distCut = 100
 
-# Load chrom size information
+## Load chrom size information
 hg19File = file.path(baseDir, "ucsc/database/hg19.genome")
 hg19Df = read.delim(hg19File, header=T, as.is=T)
 hg19Df = hg19Df[hg19Df$chrom %in% chrs,]
@@ -59,7 +62,7 @@ hg19Df = hg19Df[order(hg19Df$chrom),]
 # ruby 1.noncodiver-hotspot_detection.rb
 
 ##
-## Merge hotspot candidates
+## Merge hotspot candidates and calculate FDRs
 ##
 hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*.hotspot%d.txt", distCut))))
 hotspotDf = data.frame()
@@ -72,24 +75,11 @@ for (hotspotChrFile in hotspotChrFiles) {
 hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr")
 hotspotDf = hotspotDf[order(hotspotDf$all_adj_scnt_p_value),]
 
-#head(hotspotDf)
-#summary(hotspotDf$width)
-#hist(hotspotDf$width)
-#summary(hotspotDf$all_adj_scnt_p_value)
-#hist(hotspotDf$all_adj_scnt_p_value)
-
-#hotspotFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.scnt.hotspot%d.txt", distCut))
-#write.table(hotspotDf, hotspotFile, row.names = F, col.names = T, sep = "\t", quote = F)
-
 
 ##
-## Filter significant hotspots
+## Filter based on FDR (< 0.05) and generate chromosome-level hotspot files and VEP inputs files
 ##
-
 hotspotSigDf = subset(hotspotDf, all_adj_scnt_p_value < 0.05)
-#nrow(hotspotSigDf)
-#summary(hotspotSigDf$all_adj_scnt_p_value)
-#hist(hotspotSigDf$width)
 
 for (chr in chrs) {
     chr = as.character(chr)
@@ -98,13 +88,12 @@ for (chr in chrs) {
     hotspotSigChrFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr%s.sanitized.scnt.hotspot%d.fdr0.05.txt", chr, distCut))
     hotspotSigChrVepFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr%s.sanitized.scnt.hotspot%d.fdr0.05.vep_in.txt", chr, distCut))
     write.table(hotspotSigChrDf, hotspotSigChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
-    write.table(hotspotSigChrDf[, c("space", "start", "end", "allele", "strand")],
-                hotspotSigChrVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
+    write.table(hotspotSigChrDf[, c("space", "start", "end", "allele", "strand")], hotspotSigChrVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
 }
 
 
 ##
-## Annotate significant hotspots with VEP
+## Annotate hotspots with VEP
 ##
 hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*hotspot%d.fdr0.05.vep_in.txt", distCut))))
 for (hotspotChrVepSigFile in hotspotChrVepSigFiles) {
@@ -184,10 +173,8 @@ bsub -g /nd/hotspot/vep \\
 # ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/expand_vep_out.rb $f > $f.expanded;done
 
 
-##
 ## Annotate significant hotspots with VEP output
-##
-hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut, rscntPerSloci))))
+hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut))))
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
     hotspotSigVepOutChrDf = read.delim(hotspotSigVepOutChrFile, header = T, as.is = T)
@@ -201,17 +188,19 @@ for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Writing %s ...\n", hotspotSigVepMergedOutFile))
     write.table(hotspotSigVepOutMergedDf, hotspotSigVepMergedOutFile, row.names = F, col.names = T, sep = "\t", quote = F)
 }
+rm(hotspotSigVepOutChrDf)
+rm(hotspotSigVepOutMergedDf)
 
 
 ##
-## Test asssociation between nearby genes
+## Test asssociation between hotspots and nearby genes
 ##
 
-
-## Load exome mutation data from GDAC
+## Load exome mutation data
 mafFiles = Sys.glob(file.path(gdacAnlDataDir, "*/*/*/*.maf"))
 mafPanDf = data.frame()
 for (i in 1:length(mafFiles)) {
+    mafFile = mafFiles[i]
     cat(sprintf("Reading %s ...\n", mafFile))
     mafDf = read.delim(mafFile, header = T, as.is = T)[, c(1:19)]
     if (i == 1) {
@@ -224,39 +213,51 @@ for (i in 1:length(mafFiles)) {
 }
 nonFuncVarClasses = c("Silent")
 mafPanFuncDf = subset(mafPanDf, Variant_Classification %nin% nonFuncVarClasses)
+mafPanFuncDf$sid = unlist(mclapply(mafPanFuncDf$Tumor_Sample_Barcode,
+                                   function(x) {
+                                       elems = strsplit(x, "-", fixed = T)[[1]][1:4]
+                                       elems[4] = substring(elems[4], 1, 2)
+                                       paste(elems, collapse = "_") }, mc.cores = numCores))
 mafRdata = file.path(gdacAnlDataDir, "mafPanFunc.RData")
 save(mafPanFuncDf, file = mafRdata)
 
 
-## Load mRNA expression data from GDAC
+## Load mRNA expression data
 rsemFiles = Sys.glob(file.path(gdacStdDataDir, "*/*/*/*RSEM_all.txt"))
-rsemPanDf = data.frame()
-rsemLog2FoldPanDf = data.frame()
-for (i in 1:length(rsemFiles)) {
-    rsemFile = rsemFiles[i]
-    cat(sprintf("Processing %s ...\n", rsemFile))
-    rsemDf = read.delim(rsemFile, header = T, as.is = T)
-    colnames(rsemDf)[1] = "id"
-    colnames(rsemDf)[2:ncol(rsemDf)] = as.vector(sapply(colnames(rsemDf)[2:ncol(rsemDf)], function(x) paste(strsplit(x, ".", fixed = T)[[1]][2:4], collapse = "__")))
-    rsemDf$symbol = sapply(rsemDf$id, function(x) strsplit(x, "|", fixed = T)[[1]][1])
-    rsemDf$entrez = sapply(rsemDf$id, function(x) strsplit(x, "|", fixed = T)[[1]][2])
+rpkmFiles = Sys.glob(file.path(gdacStdDataDir, "STAD/*/*/*RPKM.txt"))
+geneExpFiles = c(rsemFiles, rpkmFiles)
+geneExpPanDf = data.frame()
+geneExpLog2FoldPanDf = data.frame()
+for (i in 1:length(geneExpFiles)) {
+    geneExpFile = geneExpFiles[i]
+    cat(sprintf("Processing %s ...\n", geneExpFile))
+    geneExpDf = read.delim(geneExpFile, header = T, as.is = T)
+    colnames(geneExpDf)[1] = "id"
+    colnames(geneExpDf)[2:ncol(geneExpDf)] = as.vector(sapply(colnames(geneExpDf)[2:ncol(geneExpDf)],
+                                                              function(x) paste(strsplit(x, ".", fixed = T)[[1]][1:4], collapse = "_")))
+    geneExpDf$symbol = sapply(geneExpDf$id, function(x) strsplit(x, "|", fixed = T)[[1]][1])
+    geneExpDf$entrez = sapply(geneExpDf$id, function(x) gsub(".*?(\\d+).*", "\\1", strsplit(x, "|", fixed = T)[[1]][2]))
+    geneExpLog2Df = log2(geneExpDf[, grep("TCGA", colnames(geneExpDf))] + 1)
+    geneExpLog2FoldDf = geneExpLog2Df - rowMeans(geneExpLog2Df)
+    geneExpLog2FoldDf = data.frame(id = geneExpDf$id, symbol = geneExpDf$symbol, entrez = geneExpDf$entrez, geneExpLog2FoldDf)
+    subset(geneExpDf, symbol == "OR9I1")
 
-    rsemLog2Df = log2(rsemDf[, grep("__", colnames(rsemDf))] + 1)
-    rsemLog2FoldDf = rsemLog2Df - rowMeans(rsemLog2Df)
-    rsemLog2FoldDf = data.frame(id = rsemDf$id, symbol = rsemDf$symbol, entrez = rsemDf$entrez, rsemLog2FoldDf)
     if (i == 1) {
-        rsemPanDf = rsemDf
-        rsemLog2FoldPanDf = rsemLog2FoldDf
+        geneExpPanDf = geneExpDf
+        geneExpLog2FoldPanDf = geneExpLog2FoldDf
     } else {
-        rsemPanDf = cbind(rsemPanDf, rsemDf[, grep("__", colnames(rsemDf))])
-        rsemLog2FoldPanDf = cbind(rsemLog2FoldPanDf, rsemLog2FoldDf[, grep("__", colnames(rsemLog2FoldDf))])
+        geneExpDf$id = NULL
+        geneExpLog2FoldDf$id = NULL
+        geneExpPanDf = merge(geneExpPanDf, geneExpDf, by = c("symbol", "entrez"), all.x = TRUE)
+        geneExpLog2FoldPanDf = merge(geneExpLog2FoldPanDf, geneExpLog2FoldDf, by = c("symbol", "entrez"), all.x = TRUE)
     }
 }
-rsemLog2FoldPanRdata = file.path(gdacStdDataDir, "rsemLog2FoldPan.RData")
-save(rsemLog2FoldPanDf, file = rsemLog2FoldPanRdata)
+
+geneExpLog2FoldPanRdata = file.path(gdacStdDataDir, "geneExpLog2FoldPan.RData")
+save(geneExpLog2FoldPanDf, file = geneExpLog2FoldPanRdata)
 
 
-## Load SCNA data for filter
+## Load SCNA data 
 cnvByGeneFiles = Sys.glob(file.path(gdacAnlDataDir, "*/*/*/all_data_by_genes.txt"))
 cnvByGeneDf = data.frame()
 for (i in 1:length(cnvByGeneFiles)) {
@@ -266,14 +267,14 @@ for (i in 1:length(cnvByGeneFiles)) {
     cnvByGeneTmpDf = cnvByGeneTmpDf[, c(-2,-3)]
     colnames(cnvByGeneTmpDf)[2:ncol(cnvByGeneTmpDf)] = as.vector(sapply(colnames(cnvByGeneTmpDf)[2:ncol(cnvByGeneTmpDf)],
                                                                         function(x) {
-                                                                            elems = strsplit(x, ".", fixed = T)[[1]][2:4]
-                                                                            elems[3] = substring(elems[3], 1, 2)
-                                                                            paste(elems, collapse = "__")
+                                                                            elems = strsplit(x, ".", fixed = T)[[1]][1:4]
+                                                                            elems[4] = substring(elems[4], 1, 2)
+                                                                            paste(elems, collapse = "_")
                                                                         }))
     if (i == 1) {
         cnvByGeneDf = cnvByGeneTmpDf
     } else {
-        cnvByGeneDf = cbind(cnvByGeneDf, cnvByGeneTmpDf[, grep("__", colnames(cnvByGeneTmpDf))])
+        cnvByGeneDf = cbind(cnvByGeneDf, cnvByGeneTmpDf[, grep("TCGA", colnames(cnvByGeneTmpDf))])
     }
 }
 rownames(cnvByGeneDf) = cnvByGeneDf$Gene.Symbol
@@ -282,12 +283,30 @@ cnvByGeneRdata = file.path(gdacStdDataDir, "cnvByGene.RData")
 save(cnvByGeneDf, file = cnvByGeneRdata)
 
 
-## Run ruby script for batch jobs
+## Split hotspot files into pieces for association tests
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
+    cat(sprintf("Splitting %s ...\n", hotspotAnnotChrFile))
+    hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
+    unique(hotspotAnnotChrDf$Location)
+    hotspotAnnotChrSplittedLst <- split(hotspotAnnotChrDf, hotspotAnnotChrDf$Location)
+    for (i in 1:length(hotspotAnnotChrSplittedLst)) {
+        hotspotAnnotChrIndDir = file.path(baseDir, "hotspot", "chrs", hotspotAnnotChrDf$space[1])
+        dir.create(hotspotAnnotChrIndDir, recursive = TRUE, showWarnings = FALSE)
+        hotspotAnnotChrIndFile = file.path(hotspotAnnotChrIndDir, gsub("txt", sprintf("%05d.txt", i), basename(hotspotAnnotChrFile)))
+        cat(sprintf("Writing %s ...\n", hotspotAnnotChrIndFile))
+        write.table(hotspotAnnotChrSplittedLst[[i]], hotspotAnnotChrIndFile, row.names = F, col.names = T, sep = "\t", quote = F)
+    }
+}
+
+
+## Run ruby script for batch association jobs
 # ruby 2.noncodiver-hotspot_association.rb
 
+
 ## Collect association results
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.asstested.txt", distCut))))
-#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.asstested.txt", distCut))))
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
 hotspotAnnotDf = data.frame()
 for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))
@@ -320,13 +339,22 @@ hotspotAnnotSigGrpDf = sqldf('SELECT space, start, end, sids, all_adj_scnt_p_val
 for (i in 1:nrow(hotspotAnnotSigGrpDf)) {
     sampleIds = strsplit(hotspotAnnotSigGrpDf[i, "sids"], ",")[[1]]
     for (c in names(sampleIdsByCancerLst)) {
-        hotspotAnnotSigGrpDf[i, c] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
+        hotspotAnnotSigGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
+        hotspotAnnotSigGrpDf[i, sprintf("%s_PCT", c)] = 100 * sum(sampleIds %in% sampleIdsByCancerLst[[c]]) / length(sampleIdsByCancerLst[[c]])
+        hotspotAnnotSigGrpDf[i, sprintf("%s_BIN", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]]) > 0
     }
 }
 
+## Hotspot distribution across cancer types
 hotspotAnnotSigGrpDf = hotspotAnnotSigGrpDf[order(hotspotAnnotSigGrpDf$all_adj_scnt_p_value),]
-head(hotspotAnnotSigGrpDf)
+hotspotAnnotSigGrpMat = log10(as.matrix(head(hotspotAnnotSigGrpDf[, c(grep("_PCT", colnames(hotspotAnnotSigGrpDf)))], 50)))
+hotspotAnnotSigGrpMat = hotspotAnnotSigGrpMat[rev(rownames(hotspotAnnotSigGrpMat)),]
 
+colfunc = colorRampPalette(c("white", "red"))
+image(t(hotspotAnnotSigGrpMat), col = colfunc(100))
+
+
+## Clustering sample-level hotspot profiles
 sampleHotspotMutProfileDf <- foreach(sampleId=unlist(sampleIdsByCancerLst), .combine = rbind) %dopar% {
     print(sampleId)
     sapply(1:nrow(hotspotAnnotSigGrpDf), function(x) as.integer(grepl(sampleId, hotspotAnnotSigGrpDf[x,]$sids)))
@@ -397,8 +425,6 @@ hotspotAnnotSigDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotSigDf$SYMBOL %in% tcgaSmg
 ##
 hotspotAnnotFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.fdr0.01.annotated.txt", distCut))
 write.table(hotspotAnnotSigDf, hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
-save.image(imageFile)
-load(imageFile)
 
 
 ##

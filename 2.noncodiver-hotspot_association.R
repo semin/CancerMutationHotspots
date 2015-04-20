@@ -1,7 +1,7 @@
 args = commandArgs(TRUE)
+annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/chrs/Y/TCGA_16_Cancer_Types.wgs.somatic.chrY.sanitized.scnt.hotspot100.fdr0.05.annotated.00019.txt"
 annotFile = args[1]
-annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/TCGA_16_Cancer_Types.wgs.somatic.chr10.sanitized.scnt.hotspot100.fdr0.05.annotated.txt"
-numCores = 10
+numCores = as.integer(args[2])
 
 ##
 ## Load libraries
@@ -9,15 +9,18 @@ numCores = 10
 require(doMC)
 registerDoMC(numCores)
 
+require(sqldf)
 require(proxy)
 require(gdata)
 require(gtools)
 require(ggplot2)
 require(annotate)
 require(snpStats)
+require(data.table)
 require(Biostrings)
 require(org.Hs.eg.db)
 require(GenomicRanges)
+require(VariantAnnotation)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
 
@@ -61,29 +64,59 @@ my.wilcox.test.p.value <- function(...) {
   if (is(obj, "try-error")) return(NA) else if (is.nan(obj$p.value)) return(NA) else return(obj$p.value) 
 } 
 
+## Load RefSeq ID to gene name mapping table
+geneInfoFile = file.path(baseDir, "entrez/gene_info_human.txt")
+geneInfoDt = fread(geneInfoFile, header = F)
+geneInfoDt = geneInfoDt[, c(2:5), with = F]
+setnames(geneInfoDt, c("GeneID", "Symbol", "LocusTag", "Synonyms"))
+geneInfoExtDt = geneInfoDt[, list(Synonym = unlist(strsplit(Synonyms, "|", fixed = T), use.names = FALSE)), by = "GeneID,Symbol,LocusTag"]
+setkey(geneInfoExtDt, Symbol)
+
+
+## Load total sample IDs for hotspots
+vcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
+sampleIdsByCancerLst = list()
+sampleIdToCancerDf = data.frame()
+for (vcfFile in vcfFiles) {
+    print(vcfFile)
+    cancerType = basename(dirname(vcfFile))
+    sampleIds = samples(scanVcfHeader(vcfFile))
+    sampleAbbIds = sapply(sampleIds, function(x) { 
+                              elems = strsplit(x, "-", fixed = T)[[1]][1:4]
+                              elems[1] = "TCGA"
+                              elems[4] = substring(elems[4], 1, 2)
+                              paste(elems, collapse = "_") })
+    sampleIdsByCancerLst[[cancerType]] = sampleAbbIds
+    for (sampleAbbId in sampleAbbIds) {
+        sampleIdToCancerDf = rbind(sampleIdToCancerDf, data.frame(sid = sampleAbbId, cancer = cancerType))
+    }
+}
+totSids = as.vector(unlist(sampleIdsByCancerLst))
+
 
 # Load exome SNV/indel data from GDAC
 mafRdata = file.path(gdacAnlDataDir, "mafPanFunc.RData")
 load(mafRdata)
 
+
 ## Load mRNA expression data from GDAC
-rsemLog2FoldPanRdata = file.path(gdacStdDataDir, "rsemLog2FoldPan.RData")
-load(rsemLog2FoldPanRdata)
+geneExpLog2FoldPanRdata = file.path(gdacStdDataDir, "geneExpLog2FoldPan.RData")
+load(geneExpLog2FoldPanRdata)
+geneExpLog2FoldPanDt = as.data.table(geneExpLog2FoldPanDf)
+setkey(geneExpLog2FoldPanDt, symbol)
+
 
 ## Load SCNA data for filter
 cnvByGeneRdata = file.path(gdacStdDataDir, "cnvByGene.RData")
 load(cnvByGeneRdata)
 
+
 ## Load hotspot data
 annotDf = read.delim(annotFile, header = T, as.is = T)
-#nrow(annotDf)
-#names(annotDf)
-
 annotDf$allele = NULL
 annotDf$strand = NULL
 annotGrpDf = sqldf('SELECT *, group_concat(SYMBOL) AS SYMBOLS FROM annotDf GROUP BY Location')
-#nrow(annotGrpDf)
-#head(annotGrpDf)
+
 
 ## Expand gene sets and check associations
 assColNames = c("distalDhsToPromoterDhs",
@@ -105,97 +138,114 @@ for (i in 1:nrow(annotGrpDf)) {
     knownGenes = knownGenes[knownGenes != ""]
     newGenes = c()
     for (assColName in assColNames) {
-        if (grepl("four", assColName)) {
-            suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
-                                                    function(x) strsplit(x, "_", fixed = T)[[1]][4]),
-                                             function(y) strsplit(y, "|", fixed = T)[[1]])))
-            suppGenes = suppGenes[suppGenes != "NA"]
-        } else if (grepl("insitu", assColName)) {
-            suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
-                                                    function(x) strsplit(x, "_", fixed = T)[[1]][7]),
-                                             function(y) strsplit(y, "|", fixed = T)[[1]])))
-            suppGenes = suppGenes[suppGenes != "NA"]
-        } else {
-            suppGenes = unique(strsplit(annotGrpDf[i, assColName], ",")[[1]])
-        }
-        newGenes = c(newGenes, suppGenes)
-    }
-    newGenes = unique(newGenes)
-    assGenes = unique(c(knownGenes, newGenes))
-    assGenesByLocLst[[annotGrpDf[i,]$Location]] = assGenes
-}
-
-for (i in 1:nrow(annotDf)) {
-    gene = annotDf[i,]$SYMBOL
-    if (gene == "") {
-        next
-    } else {
-        suppColNames = c()
-        for (assColName in assColNames) {
-            if (grepl(gene, annotDf[i, assColName], fixed = T)) {
-                cat(sprintf("Association between hotspot (%s) and %s is supported by %s\n",
-                            annotDf[i, "Location"], gene, assColName))
-                suppColNames = c(suppColNames, assColName)
+        if (!is.na(annotGrpDf[i, assColName])) {
+            if (grepl("four", assColName)) {
+                suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
+                                                        function(x) strsplit(x, "_", fixed = T)[[1]][4]),
+                                                 function(y) strsplit(y, "|", fixed = T)[[1]])))
+                suppGenes = suppGenes[suppGenes != "NA"]
+            } else if (grepl("insitu", assColName)) {
+                suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
+                                                        function(x) strsplit(x, "_", fixed = T)[[1]][7]),
+                                                 function(y) strsplit(y, "|", fixed = T)[[1]])))
+                suppGenes = suppGenes[suppGenes != "NA"]
+            } else {
+                suppGenes = unique(strsplit(annotGrpDf[i, assColName], ",")[[1]])
             }
+            newGenes = c(newGenes, suppGenes)
         }
-        annotDf[i, "supported_by"] = paste(suppColNames, collapse = ";")
     }
+    assGenesByLocLst[[annotGrpDf[i,]$Location]] = sort(unique(c(knownGenes, newGenes)))
 }
-annotDf[is.na(annotDf$supported_by), "supported_by"] = ""
 
 
 ## Test significance of expression changes of nearby genes and mutual exclusivity with other somatic mutations
 assDf = data.frame()
-for (i = 1:nrow(annotGrpDf)) {
+for (i in 1:nrow(annotGrpDf)) {
     hotspotName = paste("chr", annotGrpDf[i, "Location"], sep = "")
-    cat(sprintf("Processing %d of %d ...\n", i, nrow(annotGrpDf)))
     assGenes = assGenesByLocLst[[annotGrpDf[i, "Location"]]]
+    if (length(assGenes) == 0) next
+    cat(sprintf("Processing %d of %d (%d genes)...\n", i, nrow(annotGrpDf), length(assGenes)))
+    assGrpDf <- foreach (assGene=assGenes, .combine = rbind) %dopar% {
+        hotspotMtSids = as.vector(sapply(strsplit(annotGrpDf[i, "sids"], ",", fixed = T)[[1]],
+                                         function(x) { 
+                                             elems = strsplit(x, "-", fixed = T)[[1]][1:4]
+                                             elems[1] = "TCGA"
+                                             elems[4] = substring(elems[4], 1, 2)
+                                             paste(elems, collapse = "_") }))
+        hotspotWtSids = setdiff(totSids, hotspotMtSids)
 
-    assGrpDf <- foreach (assGene=assGenes) %dopar% {
         cnvByGeneGeneDf = cnvByGeneDf[assGene,]
         if (!all(is.na(cnvByGeneGeneDf)) & nrow(cnvByGeneGeneDf) > 0) {
-            cpids = colnames(cnvByGeneGeneDf[, cnvByGeneGeneDf > 0.3 | cnvByGeneGeneDf < -0.3])
+            cnvMtSids = colnames(cnvByGeneGeneDf[, cnvByGeneGeneDf > 0.3 | cnvByGeneGeneDf < -0.3])
         } else {
-            cpids = c()
+            cnvMtSids = c()
         }
-        rsemLog2FoldGeneDf = subset(rsemLog2FoldPanDf, symbol == assGene)
-        if (nrow(rsemLog2FoldGeneDf) > 0) {
-            mpids = as.vector(sapply(strsplit(annotGrpDf[i, "sids"], ",", fixed = T)[[1]],
-                                    function(x) { 
-                                        elems = strsplit(x, "-", fixed = T)[[1]][2:4]
-                                        elems[3] = substring(elems[3], 1, 2)
-                                        paste(elems, collapse = "__")
-                                    }))
-            epids = grep("__", names(rsemLog2FoldPanDf), value = T)
-            wepids = setdiff(setdiff(epids, mpids), cpids)
-            mepids = intersect(mpids, epids)
-            rsemLog2FoldGeneMt = as.numeric(as.vector(rsemLog2FoldGeneDf[, mepids]))
-            rsemLog2FoldGeneWt = as.numeric(as.vector(rsemLog2FoldGeneDf[, wepids]))
-            ttPvalueGeneLog2FoldExpMutVsWdt = my.t.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
-            wtPvalueGeneLog2FoldExpMutVsWdt = my.wilcox.test.p.value(rsemLog2FoldGeneMt, rsemLog2FoldGeneWt)
+
+        ## Mutual exclusivity
+        cnvMtSids = intersect(cnvMtSids, totSids)
+        mafMtSids = intersect(unique(subset(mafPanFuncDf, Hugo_Symbol == assGene)$sid), totSids)
+        somMtSids = union(mafMtSids, cnvMtSids)
+        bothMutCnt = length(intersect(hotspotMtSids, somMtSids))
+        hotspotOnlyMutCnt = length(setdiff(hotspotMtSids, somMtSids))
+        somOnlyMutCnt = length(setdiff(somMtSids, hotspotMtSids))
+        noneMutCnt = length(setdiff(hotspotWtSids, somMtSids))
+        hotspotMat = matrix(c(bothMutCnt, somOnlyMutCnt, hotspotOnlyMutCnt, noneMutCnt),
+                            nrow = 2, dimnames = list(Hotspot = c("MT", "WT"), Other = c("MT", "WT")))
+        hotspotMutExcFisher = fisher.test(hotspotMat, alternative = "less")
+        hotspotMutExcPvalue = hotspotMutExcFisher$p.value
+        hotspotMutExcOr = as.numeric(hotspotMutExcFisher$estimate)
+
+        if (hotspotMutExcPvalue < 0.05) {
+            cat(sprintf("Found significant mutual exclusivity (odds ratio: %f, p-value: %f) between %s in %s mutations!\n",
+                        hotspotMutExcOr, hotspotMutExcPvalue, hotspotName, assGene))
+        }
+
+        ## Expression changes
+        geneExpLog2FoldGeneDt = geneExpLog2FoldPanDt[assGene,]
+        if (nrow(geneExpLog2FoldGeneDt) > 1) {
+            geneExpLog2FoldGeneDt = geneExpLog2FoldGeneDt[geneExpLog2FoldGeneDt$entrez == geneInfoExtDt[Symbol == assGene,]$GeneID[1],]
+            if (nrow(geneExpLog2FoldGeneDt) > 1) {
+                geneExpLog2FoldGeneDt = geneExpLog2FoldGeneDt[1, intersect(colnames(geneExpLog2FoldPanDt), totSids), with = F]
+            }
+        } else if (nrow(geneExpLog2FoldGeneDt) == 1) {
+            geneExpLog2FoldGeneDt = geneExpLog2FoldGeneDt[, intersect(colnames(geneExpLog2FoldPanDt), totSids), with = F]
+        }
+
+        if (nrow(geneExpLog2FoldGeneDt) > 0) {
+            expSids = grep("TCGA", names(geneExpLog2FoldGeneDt), value = T)
+            expHotspotWtSids = setdiff(intersect(hotspotWtSids, expSids), cnvMtSids)
+            expHotspotMtSids = intersect(hotspotMtSids, expSids)
+            geneExpLog2FoldGeneMt = as.numeric(geneExpLog2FoldGeneDt[, expHotspotMtSids, with = F])
+            geneExpLog2FoldGeneWt = as.numeric(geneExpLog2FoldGeneDt[, expHotspotWtSids, with = F])
+            ttPvalueGeneLog2FoldExpMutVsWdt = my.t.test.p.value(geneExpLog2FoldGeneMt, geneExpLog2FoldGeneWt)
+            wtPvalueGeneLog2FoldExpMutVsWdt = my.wilcox.test.p.value(geneExpLog2FoldGeneMt, geneExpLog2FoldGeneWt)
             if (!is.na(ttPvalueGeneLog2FoldExpMutVsWdt) & !is.na(wtPvalueGeneLog2FoldExpMutVsWdt)) {
-                if (ttPvalueGeneLog2FoldExpMutVsWdt <= 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt <= 0.05) {
-                    cat(sprintf("Found a significant expression change of %s in %s mutant group!\n", assGene, hotspotName))
+                if (ttPvalueGeneLog2FoldExpMutVsWdt < 0.05 | wtPvalueGeneLog2FoldExpMutVsWdt < 0.05) {
+                    cat(sprintf("Found significant expression change of %s in %s mutant group!\n", assGene, hotspotName))
                     geneLog2FoldExpMutVsWdtDf = data.frame()
-                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("MT", length(mepids)), log2FoldRsem = rsemLog2FoldGeneMt))
-                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(wepids)), log2FoldRsem = rsemLog2FoldGeneWt))
+                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("MT", length(expHotspotMtSids)), log2FoldRsem = geneExpLog2FoldGeneMt))
+                    geneLog2FoldExpMutVsWdtDf = rbind(geneLog2FoldExpMutVsWdtDf, data.frame(type=rep("WT", length(expHotspotWtSids)), log2FoldRsem = geneExpLog2FoldGeneWt))
                     p = ggplot(geneLog2FoldExpMutVsWdtDf, aes(factor(type), log2FoldRsem)) +
                         geom_boxplot() + 
-                        theme(plot.title   = element_text(size = baseFontSize + 2, face="bold"),
+                        theme(plot.title = element_text(size = baseFontSize + 2, face="bold"),
                             axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
                             axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
-                            axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
-                            axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+                            axis.text.x = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 0, hjust = NULL),
+                            axis.text.y = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
                             panel.grid.major = element_blank(),
                             panel.grid.minor = element_blank(),
                             panel.background = element_rect(color = "black", fill="white"),
                             legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
-                            legend.text  = element_text(size = baseFontSize, family="sans"),
+                            legend.text = element_text(size = baseFontSize, family="sans"),
                             legend.direction = "horizontal",
                             legend.position = "bottom") +
-                        scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f", wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
+                        scale_x_discrete(name=sprintf("\nWilcoxon signed-rank test: %f\nStudent's t-test: %f",
+                                                      wtPvalueGeneLog2FoldExpMutVsWdt, ttPvalueGeneLog2FoldExpMutVsWdt)) +
                         scale_y_continuous(name = sprintf("Log2 fold change of %s expression\n", assGene))
-                    mutVsWdtExpPlotFile = file.path(figDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, assGene))
+                    mutVsWdtExpPlotDir = file.path(figDir, "expression", annotGrpDf[i, "space"])
+                    dir.create(mutVsWdtExpPlotDir, recursive = TRUE, showWarnings = FALSE)
+                    mutVsWdtExpPlotFile = file.path(mutVsWdtExpPlotDir, sprintf("%s-%s-MutVsWdt-Log2FoldRsem.pdf", hotspotName, assGene))
                     ggsave(filename = mutVsWdtExpPlotFile, plot = p, width = 5, height = 6)
                 }
             }
@@ -203,15 +253,42 @@ for (i = 1:nrow(annotGrpDf)) {
             ttPvalueGeneLog2FoldExpMutVsWdt = NA
             wtPvalueGeneLog2FoldExpMutVsWdt = NA
         }
-
-        return(data.frame(Location = annotGrpDf[i,]$Location,
-                          SYMBOL = assGene,
-                          ttPvalueGeneLog2FoldExpMutVsWdt = ttPvalueGeneLog2FoldExpMutVsWdt,
-                          wtPvalueGeneLog2FoldExpMutVsWdt = wtPvalueGeneLog2FoldExpMutVsWdt))
+        data.frame(Location = annotGrpDf[i,]$Location,
+                   SYMBOL = assGene,
+                   mutualExclusivityPvalue = hotspotMutExcPvalue,
+                   mutualExclusivityLog2OddsRatio = log2(hotspotMutExcOr),
+                   log2FoldExpressionTtestPvalue = ttPvalueGeneLog2FoldExpMutVsWdt,
+                   log2FoldExpressionWilcoxPvalue = wtPvalueGeneLog2FoldExpMutVsWdt)
     }
     assDf = rbind(assDf, assGrpDf)
 }
 
-assFile = gsub("annotated.txt", "annotated.asstested.txt", annotFile, fixed = T)
-write.table(expTestedDf, expTestedFile, row.names = F, col.names = T, sep = "\t", quote = F)
+
+## Merge expanded gene associations with original annotation results
+annotGrpDf$SYMBOL = NULL
+annotGrpDf$SYMBOLS = NULL
+assAnnotDf = merge(assDf, annotGrpDf, by = c("Location"), all.x = T)
+
+## Check which method supports the associations
+for (i in 1:nrow(assAnnotDf)) {
+    gene = assAnnotDf[i,]$SYMBOL
+    if (gene != "") {
+        suppColNames = c()
+        for (assColName in assColNames) {
+            if (grepl(gene, assAnnotDf[i, assColName], fixed = T)) {
+                cat(sprintf("Association between hotspot (%s) and %s is supported by %s\n",
+                            assAnnotDf[i, "Location"], gene, assColName))
+                suppColNames = c(suppColNames, assColName)
+            }
+        }
+        assAnnotDf[i, "supported_by"] = paste(suppColNames, collapse = ";")
+    }
+}
+assAnnotDf[is.na(assAnnotDf$supported_by), "supported_by"] = ""
+for (assColName in assColNames) { assAnnotDf[, assColName] = NULL }
+
+
+## Save the results!
+assFile = gsub("txt", "asstested.txt", annotFile, fixed = T)
+write.table(assAnnotDf, assFile, row.names = F, col.names = T, sep = "\t", quote = F)
 
