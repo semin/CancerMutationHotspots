@@ -2,13 +2,13 @@
 
 require 'pathname'
 
-distCut = 50
-hotspotMargin = 25
+distCut = 100
+hotspotMargin = 50
 poisMargin = 5000
 numCores = 10
 baseDir = Pathname.new "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver"
 rScript = baseDir + "script/1.noncodiver-hotspot_detection.R"
-scntFiles = Pathname.glob(baseDir + "hotspot/*.scnt.txt").sort
+scntFiles = Pathname.glob(baseDir + "hotspot/Combined*.scnt.txt").sort
 scntFiles.each do |scntFile|
   hotspotFile = scntFile.sub_ext(".hotspot#{distCut}.txt")
   hotspotVepFile = hotspotFile.sub_ext(".vep_in.txt")

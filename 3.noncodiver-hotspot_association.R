@@ -1,20 +1,18 @@
 args = commandArgs(TRUE)
-annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/chrs/Y/TCGA_16_Cancer_Types.wgs.somatic.chrY.sanitized.scnt.hotspot100.fdr0.05.annotated.00019.txt"
+annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/chrs/17/Combined.wgs.somatic.chr17.hotspot100.fdr0.05.annotated.00090.txt"
+
 annotFile = args[1]
-numCores = as.integer(args[2])
 
 ##
 ## Load libraries
 ##
-require(doMC)
-registerDoMC(numCores)
-
 require(sqldf)
 require(proxy)
 require(gdata)
 require(gtools)
 require(ggplot2)
 require(annotate)
+require(reshape2)
 require(snpStats)
 require(data.table)
 require(Biostrings)
@@ -28,7 +26,7 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 ## Initialize global variables
 ##
 rootDir = "/home/sl279"
-baseDir = file.path(rootDir, "BiO/Research/NoncoDiver")
+baseDir = file.path(rootDir, "BiO/Research/Hotspot")
 vcfDir = file.path(baseDir, "vcf")
 hotspotDir = file.path(vcfDir, "pancan")
 hotspotDir = file.path(baseDir, "hotspot")
@@ -73,7 +71,7 @@ geneInfoExtDt = geneInfoDt[, list(Synonym = unlist(strsplit(Synonyms, "|", fixed
 setkey(geneInfoExtDt, Symbol)
 
 
-## Load total sample IDs for hotspots
+## Load TCGA sample IDs for hotspots
 vcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
 sampleIdsByCancerLst = list()
 sampleIdToCancerDf = data.frame()
@@ -115,23 +113,29 @@ load(cnvByGeneRdata)
 annotDf = read.delim(annotFile, header = T, as.is = T)
 annotDf$allele = NULL
 annotDf$strand = NULL
-annotGrpDf = sqldf('SELECT *, group_concat(SYMBOL) AS SYMBOLS FROM annotDf GROUP BY Location')
 
-
-## Expand gene sets and check associations
 assColNames = c("distalDhsToPromoterDhs",
                 "dhsToGeneExpression",
                 "fantom5EnhancerTssAssociations",
                 "allDbSuperEnhancerGeneAssociations",
                 "fourDGenomeHomoSapiens", 
-                "insitu_HiC_GM12878_100kb_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_HMEC_100kb_intra_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_HUVEC_100kb_intra_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_IMR90_100kb_intra_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_K562_100kb_intra_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_KBM7_100kb_intra_MAPQGE30_100kb_SQRTVC",
-                "insitu_HiC_NHEK_100kb_intra_MAPQGE30_100kb_SQRTVC")
+                "GSE63525_GM12878_HiCCUPS_looplist",
+                "GSE63525_HeLa_HiCCUPS_looplist",
+                "GSE63525_HMEC_HiCCUPS_looplist",
+                "GSE63525_HUVEC_HiCCUPS_looplist",
+                "GSE63525_IMR90_HiCCUPS_looplist",
+                "GSE63525_K562_HiCCUPS_looplist",
+                "GSE63525_KBM7_HiCCUPS_looplist",
+                "GSE63525_NHEK_HiCCUPS_looplist",
+                "TS5_CD34_promoter_other_significant_interactions",
+                "TS5_CD34_promoter_promoter_significant_interactions",
+                "TS5_GM12878_promoter_other_significant_interactions",
+                "TS5_GM12878_promoter_promoter_significant_interactions")
 
+annotGrpDf = sqldf("SELECT *, group_concat(SYMBOL) AS SYMBOLS FROM annotDf GROUP BY Location")
+
+
+## Expand gene sets and check associations
 assGenesByLocLst = list()
 for (i in 1:nrow(annotGrpDf)) {
     knownGenes = unique(strsplit(annotGrpDf[i,]$SYMBOLS, ",")[[1]], na.rm = T)
@@ -144,14 +148,18 @@ for (i in 1:nrow(annotGrpDf)) {
                                                         function(x) strsplit(x, "_", fixed = T)[[1]][4]),
                                                  function(y) strsplit(y, "|", fixed = T)[[1]])))
                 suppGenes = suppGenes[suppGenes != "NA"]
-            } else if (grepl("insitu", assColName)) {
-                suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
-                                                        function(x) strsplit(x, "_", fixed = T)[[1]][7]),
-                                                 function(y) strsplit(y, "|", fixed = T)[[1]])))
+            } else if (grepl("GSE63525", assColName)) {
+                suppGenes = unique(unlist(sapply(strsplit(annotGrpDf[i, assColName], ",", fixed = T)[[1]],
+                                                 function(x) strsplit(x, "|", fixed = T)[[1]])))
+                suppGenes = suppGenes[suppGenes != "NA"]
+            } else if (grepl("TS5_", assColName)) {
+                suppGenes = unique(gsub("(.*)-\\d{3}", "\\1", unlist(sapply(strsplit(annotGrpDf[i, assColName], ",", fixed = T)[[1]],
+                                                 function(x) strsplit(x, "|", fixed = T)[[1]])), perl =T))
                 suppGenes = suppGenes[suppGenes != "NA"]
             } else {
-                suppGenes = unique(strsplit(annotGrpDf[i, assColName], ",")[[1]])
+                suppGenes = unique(unlist(strsplit(annotGrpDf[i, assColName], ",", fixed = T)[[1]]))
             }
+            suppGenes = suppGenes[!startsWith(suppGenes, "ENS")]
             newGenes = c(newGenes, suppGenes)
         }
     }
@@ -166,13 +174,17 @@ for (i in 1:nrow(annotGrpDf)) {
     assGenes = assGenesByLocLst[[annotGrpDf[i, "Location"]]]
     if (length(assGenes) == 0) next
     cat(sprintf("Processing %d of %d (%d genes)...\n", i, nrow(annotGrpDf), length(assGenes)))
-    assGrpDf <- foreach (assGene=assGenes, .combine = rbind) %dopar% {
+    for (j in 1:length(assGenes)) {
+        assGene = assGenes[j]
+        cat(sprintf("Testing association bewteen %s and %s...\n", hotspotName, assGene))
+        # Deal only with TCGA samples!
         hotspotMtSids = as.vector(sapply(strsplit(annotGrpDf[i, "sids"], ",", fixed = T)[[1]],
                                          function(x) { 
                                              elems = strsplit(x, "-", fixed = T)[[1]][1:4]
                                              elems[1] = "TCGA"
                                              elems[4] = substring(elems[4], 1, 2)
                                              paste(elems, collapse = "_") }))
+        hotspotMtSids = intersect(totSids, hotspotMtSids)
         hotspotWtSids = setdiff(totSids, hotspotMtSids)
 
         cnvByGeneGeneDf = cnvByGeneDf[assGene,]
@@ -196,9 +208,35 @@ for (i in 1:nrow(annotGrpDf)) {
         hotspotMutExcPvalue = hotspotMutExcFisher$p.value
         hotspotMutExcOr = as.numeric(hotspotMutExcFisher$estimate)
 
+        # Generate a plot for mutual exclusivity!
         if (hotspotMutExcPvalue < 0.05) {
-            cat(sprintf("Found significant mutual exclusivity (odds ratio: %f, p-value: %f) between %s in %s mutations!\n",
+            cat(sprintf("Found significant mutual exclusivity (odds ratio: %f, p-value: %f) between %s and %s mutations!\n",
                         hotspotMutExcOr, hotspotMutExcPvalue, hotspotName, assGene))
+            hotspotMutExcDf = as.data.frame(rbind(c(rep("Y", hotspotOnlyMutCnt + bothMutCnt), rep("N", somOnlyMutCnt + noneMutCnt)),
+                                    c(rep("N", hotspotOnlyMutCnt), rep("Y", bothMutCnt + somOnlyMutCnt), rep("N", noneMutCnt))))
+            colnames(hotspotMutExcDf)[1:hotspotOnlyMutCnt] = setdiff(hotspotMtSids, somMtSids)
+            if (bothMutCnt > 0) colnames(hotspotMutExcDf)[(hotspotOnlyMutCnt+1):(hotspotOnlyMutCnt+bothMutCnt)] = intersect(hotspotMtSids, somMtSids)
+            colnames(hotspotMutExcDf)[(hotspotOnlyMutCnt+bothMutCnt+1):(hotspotOnlyMutCnt+bothMutCnt+somOnlyMutCnt)] = setdiff(somMtSids, hotspotMtSids)
+            colnames(hotspotMutExcDf)[(hotspotOnlyMutCnt+bothMutCnt+somOnlyMutCnt+1):(hotspotOnlyMutCnt+bothMutCnt+somOnlyMutCnt+noneMutCnt)] = setdiff(hotspotWtSids, somMtSids)
+
+            hotspotMutExcDf$mut_type = c(hotspotName, assGene)
+            suppressWarnings(hotspotMutExcMelDf <- melt(hotspotMutExcDf, id.var = 'mut_type'))
+
+            p = ggplot(hotspotMutExcMelDf, aes(x = variable, y = factor(mut_type, levels = c(assGene, hotspotName)))) + 
+                geom_tile(aes(fill = value, width = 1.0)) + 
+                    theme(axis.ticks = element_blank(),
+                          axis.text.x = element_blank(),
+                          axis.text.y = element_text(size = baseFontSize + 4, face="plain", family="sans", color = "black"),
+                          panel.grid.major = element_blank(),
+                          panel.grid.minor = element_blank(),
+                          legend.position = "none") + 
+                    scale_x_discrete(name = "", expand = c(0, 0)) +
+                    scale_y_discrete(name = "", expand = c(0, 0)) +
+                    scale_fill_manual(values = c("gray88", "red"))
+            hotspotMutExcMelPlotDir = file.path(figDir, "mutual_exclusivity", annotGrpDf[i, "space"])
+            dir.create(hotspotMutExcMelPlotDir, recursive = TRUE, showWarnings = FALSE)
+            hotspotMutExcMelFile = file.path(hotspotMutExcMelPlotDir, sprintf("%s-%s-Mutual_Exclusivity.pdf", hotspotName, assGene))
+            ggsave(filename = hotspotMutExcMelFile, plot = p, width = 30, height = 2)
         }
 
         ## Expression changes
@@ -253,42 +291,25 @@ for (i in 1:nrow(annotGrpDf)) {
             ttPvalueGeneLog2FoldExpMutVsWdt = NA
             wtPvalueGeneLog2FoldExpMutVsWdt = NA
         }
-        data.frame(Location = annotGrpDf[i,]$Location,
-                   SYMBOL = assGene,
-                   mutualExclusivityPvalue = hotspotMutExcPvalue,
-                   mutualExclusivityLog2OddsRatio = log2(hotspotMutExcOr),
-                   log2FoldExpressionTtestPvalue = ttPvalueGeneLog2FoldExpMutVsWdt,
-                   log2FoldExpressionWilcoxPvalue = wtPvalueGeneLog2FoldExpMutVsWdt)
-    }
-    assDf = rbind(assDf, assGrpDf)
-}
-
-
-## Merge expanded gene associations with original annotation results
-annotGrpDf$SYMBOL = NULL
-annotGrpDf$SYMBOLS = NULL
-assAnnotDf = merge(assDf, annotGrpDf, by = c("Location"), all.x = T)
-
-## Check which method supports the associations
-for (i in 1:nrow(assAnnotDf)) {
-    gene = assAnnotDf[i,]$SYMBOL
-    if (gene != "") {
         suppColNames = c()
         for (assColName in assColNames) {
-            if (grepl(gene, assAnnotDf[i, assColName], fixed = T)) {
+            if (grepl(assGene, annotGrpDf[i, assColName], fixed = T)) {
                 cat(sprintf("Association between hotspot (%s) and %s is supported by %s\n",
-                            assAnnotDf[i, "Location"], gene, assColName))
+                            annotGrpDf[i, "Location"], assGene, assColName))
                 suppColNames = c(suppColNames, assColName)
             }
         }
-        assAnnotDf[i, "supported_by"] = paste(suppColNames, collapse = ";")
+        assDf = rbind(assDf, data.frame(Location = annotGrpDf[i,]$Location,
+                                        Gene = assGene,
+                                        mutualExclusivityPvalue = hotspotMutExcPvalue,
+                                        mutualExclusivityLog2OddsRatio = log2(hotspotMutExcOr),
+                                        log2FoldExpressionTtestPvalue = ttPvalueGeneLog2FoldExpMutVsWdt,
+                                        log2FoldExpressionWilcoxPvalue = wtPvalueGeneLog2FoldExpMutVsWdt,
+                                        supportedBy = paste(suppColNames, collapse = ";")))
     }
 }
-assAnnotDf[is.na(assAnnotDf$supported_by), "supported_by"] = ""
-for (assColName in assColNames) { assAnnotDf[, assColName] = NULL }
-
 
 ## Save the results!
-assFile = gsub("txt", "asstested.txt", annotFile, fixed = T)
-write.table(assAnnotDf, assFile, row.names = F, col.names = T, sep = "\t", quote = F)
+assFile = gsub("txt", "ass.txt", annotFile, fixed = T)
+write.table(assDf, assFile, row.names = F, col.names = T, sep = "\t", quote = F)
 

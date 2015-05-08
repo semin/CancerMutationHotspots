@@ -4,13 +4,15 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(5)
+registerDoMC(10)
 
 require(ape)
+require(vegan)
 require(Hmisc)
 require(proxy)
 require(sqldf)
 require(gdata)
+require(scales)
 require(gtools)
 require(gplots)
 require(ggplot2)
@@ -28,7 +30,7 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 ## Initialize global variables
 ##
 rootDir = "/home/sl279"
-baseDir = file.path(rootDir, "BiO/Research/NoncoDiver")
+baseDir = file.path(rootDir, "BiO/Research/Hotspot")
 imageFile = file.path(baseDir, "script/0.noncodiver-control_tower.RData")
 #save.image(imageFile)
 #load(imageFile)
@@ -37,6 +39,7 @@ vcfDir = file.path(baseDir, "vcf")
 hotspotDir = file.path(vcfDir, "pancan")
 hotspotDir = file.path(baseDir, "hotspot")
 gdacDir = file.path(baseDir, "gdac")
+sangDir = file.path(baseDir, "sanger")
 gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
@@ -56,6 +59,47 @@ hg19Df$chrom = factor(hg19Df$chrom, levels=chrs)
 hg19Df = hg19Df[order(hg19Df$chrom),]
 
 ##
+## Combine TCGA and Stratton mutation call sets
+##
+
+## Read alt expanded TCGA mutation call sets
+tcgaChrScntFiles = mixedsort(Sys.glob(file.path(hotspotDir, "TCGA", "*.alt_expanded.txt")))
+tcgaAllScntDf = data.frame()
+for (tcgaChrScntFile in tcgaChrScntFiles) {
+    print(tcgaChrScntFile)
+    tcgaChrScntDf = read.delim(tcgaChrScntFile, header = F, as.is = T)
+    colnames(tcgaChrScntDf) = c("space", "pos", "ref", "alt", "sid")
+    tcgaAllScntDf = rbind(tcgaAllScntDf, tcgaChrScntDf)
+}
+
+
+## Read Stratton call sets
+sangCanWgsFiles = Sys.glob(file.path(sangDir, "somatic_mutation_data/*/*.wgs.txt"))
+sangAllWgsDf = data.frame()
+for (sangCanWgsFile in sangCanWgsFiles) {
+    print(sangCanWgsFile)
+    if (file.info(sangCanWgsFile)$size > 0) {
+        sangCanWgsDf = read.delim(sangCanWgsFile, header = F, as.is = T)[, c(3, 4, 6, 7, 1)]
+        colnames(sangCanWgsDf) = c("space", "pos", "ref", "alt", "sid")
+        if (nrow(sangCanWgsDf) > 0) {
+            sangAllWgsDf = rbind(sangAllWgsDf, sangCanWgsDf)
+        }
+    }
+}
+
+## Combine TCGA and Stratton call sets and generate hotspot input file
+totSnvsDf = rbind(tcgaAllScntDf, sangAllWgsDf)
+totSnvGrpDf = sqldf('SELECT space, pos, ref, alt, group_concat(sid) AS sids FROM totSnvsDf GROUP BY space, pos, ref, alt')
+for (chr in chrs) {
+    totSnvGrpChrDf = subset(totSnvGrpDf, space == chr)
+    totSnvGrpChrDf$scnt = sapply(totSnvGrpChrDf$sid, function(x) length(strsplit(x, ",")[[1]]))
+    totSnvGrpChrFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.txt", chr))
+    cat(sprintf("Writing %s ...\n", totSnvGrpChrFile))
+    write.table(totSnvGrpChrDf, totSnvGrpChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
+}
+
+
+##
 ## Detect hotspot candidates
 ##
 
@@ -64,7 +108,7 @@ hg19Df = hg19Df[order(hg19Df$chrom),]
 ##
 ## Merge hotspot candidates and calculate FDRs
 ##
-hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*.hotspot%d.txt", distCut))))
+hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.hotspot%d.txt", distCut))))
 hotspotDf = data.frame()
 for (hotspotChrFile in hotspotChrFiles) {
     cat(sprintf("Merging %s ...\n", hotspotChrFile))
@@ -73,108 +117,127 @@ for (hotspotChrFile in hotspotChrFiles) {
 }
 
 hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr")
-hotspotDf = hotspotDf[order(hotspotDf$all_adj_scnt_p_value),]
+hotspotDf$all_adj_mcnt_p_value = p.adjust(hotspotDf$mcnt_p_value, method = "fdr")
+hotspotDf = hotspotDf[order(hotspotDf$all_adj_mcnt_p_value),]
+head(hotspotDf)
 
 
 ##
 ## Filter based on FDR (< 0.05) and generate chromosome-level hotspot files and VEP inputs files
 ##
-hotspotSigDf = subset(hotspotDf, all_adj_scnt_p_value < 0.05)
+hotspotSigDf = subset(hotspotDf, all_adj_mcnt_p_value < 0.05)
+nrow(hotspotSigDf)
 
 for (chr in chrs) {
     chr = as.character(chr)
     print(chr)
     hotspotSigChrDf = subset(hotspotSigDf, space == chr)
-    hotspotSigChrFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr%s.sanitized.scnt.hotspot%d.fdr0.05.txt", chr, distCut))
-    hotspotSigChrVepFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.chr%s.sanitized.scnt.hotspot%d.fdr0.05.vep_in.txt", chr, distCut))
+    hotspotSigChrFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.hotspot%d.fdr0.05.txt", chr, distCut))
+    hotspotSigChrVepFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.hotspot%d.fdr0.05.vep_in.txt", chr, distCut))
     write.table(hotspotSigChrDf, hotspotSigChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
     write.table(hotspotSigChrDf[, c("space", "start", "end", "allele", "strand")], hotspotSigChrVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
 }
 
 
 ##
+## Postprocess promoter capture results (http://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-2323/)
+##
+promIntFiles = Sys.glob(file.path(baseDir, "e-mtab-2323/*interactions.txt"))
+for (promIntFile in promIntFiles) {
+    cat(sprintf("Processing %s ...\n", promIntFile))
+    promIntDf = read.delim(promIntFile, header = T, as.is = T)
+    if (grepl("promoter-promoter", basename(promIntFile))) {
+        promIntDf = read.delim(promIntFile, header = T, as.is = T)
+        colnames(promIntDf) = NULL
+        promIntDf1 = promIntDf[,c(1:3,10)]
+        colnames(promIntDf1) = c("chr", "start", "end", "Symbol")
+        promIntDf2 = promIntDf[,c(7:9,4)]
+        colnames(promIntDf2) = c("chr", "start", "end", "Symbol")
+        promIntBedDf = rbind(promIntDf1, promIntDf2)
+    } else {
+        promIntDf = read.delim(promIntFile, header = T, as.is = T)
+        promIntBedDf = promIntDf[,c("chr", "start", "end", "Symbol")]
+    }
+    #for (i in 1:nrow(promIntBedDf)) {
+        #promIntBedDf[i, "Symbol"] = paste(unique(sapply(strsplit(promIntBedDf[i, "Symbol"], "|", fixed = T)[[1]],
+                                                        #function(x) gsub("(.*)-\\d{3}", "\\1", x))), collapse = "|")
+    #}
+    promIntBedDf$chr = factor(promIntBedDf$chr, levels = cchrs)
+    promIntBedDf = with(promIntBedDf, promIntBedDf[order(chr, start, end),])
+    promIntBedFile = gsub("txt", "bed", promIntFile)
+    write.table(promIntBedDf, promIntBedFile, row.names = F, col.names = F, sep = "\t", quote = F)
+}
+
+
+##
+## Postprocess insitu-HiC HiCCUPS loop lists
+##
+refGeneFile = file.path(baseDir, "ucsc/database/refGene.txt.gz")
+refGeneDf = read.delim(gzfile(refGeneFile), header = F, as.is = T)[, c(2:6,13)]
+colnames(refGeneDf) = c("transcript", "space", "strand", "start", "end", "gene")
+refGeneDf$tss = with(refGeneDf, ifelse(strand == "+", start, end))
+refGenePromDf = sqldf('SELECT gene, strand, space, tss FROM refGeneDf GROUP BY gene, tss')
+prom_margin = 2000
+refGenePromDf$prom_start = refGenePromDf$tss - prom_margin
+refGenePromDf$prom_end = refGenePromDf$tss + prom_margin
+refGenePromDf$space = gsub("chr", "", refGenePromDf$space)
+refGenePromDf$space = factor(refGenePromDf$space, levels = chrs)
+refGenePromDf = refGenePromDf[refGenePromDf$space %in% chrs,]
+refGenePromGr = with(refGenePromDf, sort(GRanges(seqnames = Rle(space),
+                                            IRanges(start = prom_start, end = prom_end),
+                                            strand = strand,
+                                            gene = gene,
+                                            tss = tss)))
+
+loopFiles = Sys.glob(file.path(baseDir, "insitu-hic", "*NHEK*looplist.txt"))
+for (loopFile in loopFiles) {
+    cat(sprintf("Processing %s ...\n", loopFile))
+    loopDf = read.delim(loopFile, header = T, as.is = T)
+    loopDf$dist = with(loopDf, y1 - x2)
+    loopMirrDf = loopDf[, c("chr2", "y1", "y2", "chr1", "x1", "x2",
+                            "color", "o", "e_bl", "e_donut", "e_h", "e_v",
+                            "fdr_bl", "fdr_donut", "fdr_h", "fdr_v", "num_collapsed",
+                            "centroid2", "centroid1", "radius", "dist")]
+    colnames(loopMirrDf) = colnames(loopDf)
+    loopCombDf = rbind(loopDf, loopMirrDf)
+    loopCombDf$chr1 = factor(loopCombDf$chr1, levels = chrs)
+    loopCombDf$chr2 = factor(loopCombDf$chr2, levels = chrs)
+    targetDf = loopCombDf[, c("chr2", "y1", "y2")]
+    targetNrDf = sqldf("SELECT * FROM targetDf GROUP BY chr2, y1, y2")
+    targetNrGr = with(targetNrDf, sort(GRanges(seqnames = Rle(chr2),
+                                               IRanges(start = y1, end = y2),
+                                               strand = "*")))
+    promHitsOls = findOverlaps(targetNrGr, refGenePromGr)
+    for(i in unique(queryHits(promHitsOls))) {
+        values(targetNrGr)[i, "genes"] = paste(unique(refGenePromGr[subjectHits(promHitsOls[queryHits(promHitsOls) == i])]$gene), collapse = "|")
+    }
+    targetNrDf = as.data.frame(targetNrGr)
+    loopCombGenesDf = sqldf('SELECT l.*, t.genes 
+                            FROM loopCombDf AS l 
+                            LEFT JOIN targetNrDf AS t
+                            ON l.chr2 == t.seqnames AND l.y1 == t.start AND l.y2 == t.end')
+    loopCombGenesDf = with(loopCombGenesDf, loopCombGenesDf[order(chr1, x1, x2, chr2, y1, y2),])
+    loopCombGenesFile = gsub(".txt", ".annotated.txt", loopFile)
+    write.table(loopCombGenesDf, loopCombGenesFile, row.names = F, col.names = T, sep = "\t", quote = F)
+    loopCombGenesBedFile = gsub(".txt", ".annotated.bed", loopFile)
+    write.table(loopCombGenesDf[!is.na(loopCombGenesDf$genes), c("chr1", "x1", "x2", "genes")], loopCombGenesBedFile, row.names = F, col.names = F, sep = "\t", quote = F)
+}
+
+
+##
 ## Annotate hotspots with VEP
 ##
-hotspotChrVepSigFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*hotspot%d.fdr0.05.vep_in.txt", distCut))))
-for (hotspotChrVepSigFile in hotspotChrVepSigFiles) {
-    hotspotChrVepSigOutFile = gsub("vep_in", "vep_out", hotspotChrVepSigFile)
-    hotspotChrVepSigLsfOutFile = gsub("txt", "lsfout", hotspotChrVepSigOutFile)
-    if (file.exists(hotspotChrVepSigLsfOutFile)) next
-    system(sprintf("
-bsub -g /nd/hotspot/vep \\
-    -q i2b2_12h -W 12:0 \\
-    -n 4 -R \"span[hosts=1]\" \\
-    -o %s \\
-    perl /home/sl279/vep/variant_effect_predictor.pl \\
-        --fork 4 \\
-        --force_overwrite \\
-        --offline \\
-        --no_stats \\
-        --everything \\
-        --check_existing \\
-        --total_length \\
-        --allele_number \\
-        --no_escape \\
-        --per_gene \\
-        --symbol \\
-        --gencode_basic \\
-        --assembly GRCh37 \\
-        --dir /home/sl279/.vep \\
-        --plugin UpDownDistance,1000000,1000000 \\
-        --fasta /home/sl279/.vep/homo_sapiens/78_GRCh37/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/distalDhsToPromoterDhs.bed.gz,distalDhsToPromoterDhs,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/dhsToGeneExpression.bed.gz,dhsToGeneExpression,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/fantom5/fantom5EnhancerTssAssociations.bed.gz,fantom5EnhancerTssAssociations,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/dbsuper/all/allDbSuperEnhancerGeneAssociations.bed.gz,allDbSuperEnhancerGeneAssociations,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/4dgenome/4dGenomeHomoSapiens.bed.gz,fourDGenomeHomoSapiens,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_GM12878_100kb_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_GM12878_100kb_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_HMEC_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_HMEC_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_HUVEC_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_HUVEC_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_IMR90_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_IMR90_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_K562_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_K562_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_KBM7_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_KBM7_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/insitu-hic/insitu_HiC_NHEK_100kb_intra_MAPQGE30_100kb_SQRTVC.bed.gz,insitu_HiC_NHEK_100kb_intra_MAPQGE30_100kb_SQRTVC,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgDnaseMasterSites.bed.gz,wgEncodeAwgDnaseMasterSites,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeRegDnaseClusteredV3.bed.gz,wgEncodeRegDnaseClusteredV3,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/fantom5/fantom5PermissiveEnhancers.bed.gz,fantom5PermissiveEnhancers,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/dbsuper/all/allDbSuperEnhancers.bed.gz,allDbSuperEnhancers,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/roadmap/dnase/roadmapDnaseDyadic.bed.gz,roadmapDnaseDyadic,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/roadmap/dnase/roadmapDnaseEnh.bed.gz,roadmapDnaseEnh,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/roadmap/dnase/roadmapDnaseProm.bed.gz,roadmapDnaseProm,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeRegTfbsClusteredWithCellsV3.bed.gz,wgEncodeRegTfbsClusteredWithCellsV3,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedGm12878.bed.gz,wgEncodeAwgSegmentationCombinedGm12878,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedH1hesc.bed.gz,wgEncodeAwgSegmentationCombinedH1hesc,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHelas3.bed.gz,wgEncodeAwgSegmentationCombinedHelas3,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHepg2.bed.gz,wgEncodeAwgSegmentationCombinedHepg2,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedHuvec.bed.gz,wgEncodeAwgSegmentationCombinedHuvec,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/encode/wgEncodeAwgSegmentationCombinedK562.bed.gz,wgEncodeAwgSegmentationCombinedK562,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/all_est.bed.gz,all_est,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/gwasCatalog.bed.gz,gwasCatalog,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/targetScanS.bed.gz,targetScanS,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/tfbsConsSites.bed.gz,tfbsConsSites,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/wgRna.bed.gz,wgRna,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/phastConsElements46way.bed.gz,phastConsElements46way,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/phastConsElements100way.bed.gz,phastConsElements100way,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/gap.bed.gz,gap,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/genomicSuperDups.bed.gz,genomicSuperDups,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/rmsk.bed.gz,rmsk,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/nestedRepeats.bed.gz,nestedRepeats,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/simpleRepeat.bed.gz,simpleRepeat,bed,overlap,0 \\
-        --custom /n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/ucsc/database/microsat.bed.gz,microsat,bed,overlap,0 \\
-        --input_file %s \\
-        --output_file %s
-", hotspotChrVepSigLsfOutFile, hotspotChrVepSigFile, hotspotChrVepSigOutFile), intern = FALSE, ignore.stdout = TRUE, ignore.stderr = TRUE, wait = F)
-}
+# ruby 2.noncodiver-hotspot_annotation.rb
 
 
 ##
 ## Expand vep_out files using Ruby script
 ##
-# ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/expand_vep_out.rb $f > $f.expanded;done
+# ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/2.noncodiver-expand_vep_out.rb $f > $f.expanded;done
 
 
-## Annotate significant hotspots with VEP output
-hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut))))
+## Read VEP output and filter out suspicious hotspots overlapping segmental duplications and simple repeats
+hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut))))
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
     hotspotSigVepOutChrDf = read.delim(hotspotSigVepOutChrFile, header = T, as.is = T)
@@ -188,8 +251,21 @@ for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Writing %s ...\n", hotspotSigVepMergedOutFile))
     write.table(hotspotSigVepOutMergedDf, hotspotSigVepMergedOutFile, row.names = F, col.names = T, sep = "\t", quote = F)
 }
+
 rm(hotspotSigVepOutChrDf)
 rm(hotspotSigVepOutMergedDf)
+
+
+## Postprocess VEP annotated hotspots
+hotspotSigAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotSigAnnotDf = data.frame()
+for (hotspotSigAnnotChrFile in hotspotSigAnnotChrFiles) {
+    cat(sprintf("Reading %s ...\n", hotspotSigAnnotChrFile))
+    hotspotSigAnnotChrDf = read.delim(hotspotSigAnnotChrFile, header = T, as.is = T)
+    hotspotSigAnnotDf = rbind(hotspotSigAnnotDf, hotspotSigAnnotChrDf)
+}
+
+hotspotSigAnnotDf = with(hotspotSigAnnotDf, hotspotSigAnnotDf[order(all_adj_mcnt_p_value),])
 
 
 ##
@@ -218,6 +294,7 @@ mafPanFuncDf$sid = unlist(mclapply(mafPanFuncDf$Tumor_Sample_Barcode,
                                        elems = strsplit(x, "-", fixed = T)[[1]][1:4]
                                        elems[4] = substring(elems[4], 1, 2)
                                        paste(elems, collapse = "_") }, mc.cores = numCores))
+
 mafRdata = file.path(gdacAnlDataDir, "mafPanFunc.RData")
 save(mafPanFuncDf, file = mafRdata)
 
@@ -288,7 +365,6 @@ hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.h
 for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     cat(sprintf("Splitting %s ...\n", hotspotAnnotChrFile))
     hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
-    unique(hotspotAnnotChrDf$Location)
     hotspotAnnotChrSplittedLst <- split(hotspotAnnotChrDf, hotspotAnnotChrDf$Location)
     for (i in 1:length(hotspotAnnotChrSplittedLst)) {
         hotspotAnnotChrIndDir = file.path(baseDir, "hotspot", "chrs", hotspotAnnotChrDf$space[1])
@@ -301,155 +377,81 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
 
 
 ## Run ruby script for batch association jobs
-# ruby 2.noncodiver-hotspot_association.rb
+# ruby 3.noncodiver-hotspot_association.rb
 
 
 ## Collect association results
-#hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.asstested.txt", distCut))))
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
-hotspotAnnotDf = data.frame()
-for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
-    cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))
-    hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
-    hotspotAnnotDf = rbind(hotspotAnnotDf, hotspotAnnotChrDf)
-}
-hotspotAnnotDf = hotspotAnnotDf[order(hotspotAnnotDf$all_adj_scnt_p_value),]
-hotspotAnnotSigDf = hotspotAnnotDf[hotspotAnnotDf$all_adj_scnt_p_value < 0.01,]
-
-
-##
-## Add cancer distribution information
-##
-vcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
-sampleIdsByCancerLst = list()
-sampleIdToCancerDf = data.frame()
-for (vcfFile in vcfFiles) {
-    canerType = basename(dirname(vcfFile))
-    sampleIds = samples(scanVcfHeader(vcfFile))
-    sampleIdsByCancerLst[[canerType]] = sampleIds
-    for (sampleId in sampleIds) {
-        sampleIdToCancerDf = rbind(sampleIdToCancerDf, data.frame(id = sampleId, cancer = cancerType))
+hotspotAssFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("chrs/*/*chr*.hotspot%d.fdr0.05.annotated.*.ass.txt", distCut))))
+hotspotAssDt <- foreach(hotspotAssFile=hotspotAssFiles, .combine=function(...) rbindlist(list(...)), .multicombine=TRUE) %dopar% {
+    cat(sprintf("Reading %s ...\n", hotspotAssFile))
+    if (file.info(hotspotAssFile)$size > 1) {
+        hotspotAssDt = fread(hotspotAssFile, header = T)
     }
 }
 
-hotspotAnnotSigDf$allele = NULL
-hotspotAnnotSigDf$strand = NULL
-hotspotAnnotSigGrpDf = sqldf('SELECT space, start, end, sids, all_adj_scnt_p_value FROM hotspotAnnotSigDf GROUP BY space, start, end ORDER BY space, start, end')
+hotspotAssDf = as.data.frame(hotspotAssDt)
+hotspotAssSigDf = subset(hotspotAssDf, log2FoldExpressionWilcoxPvalue < 0.05)
+nrow(hotspotAssSigDf)
+head(hotspotAssSigDf)
 
-for (i in 1:nrow(hotspotAnnotSigGrpDf)) {
-    sampleIds = strsplit(hotspotAnnotSigGrpDf[i, "sids"], ",")[[1]]
-    for (c in names(sampleIdsByCancerLst)) {
-        hotspotAnnotSigGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
-        hotspotAnnotSigGrpDf[i, sprintf("%s_PCT", c)] = 100 * sum(sampleIds %in% sampleIdsByCancerLst[[c]]) / length(sampleIdsByCancerLst[[c]])
-        hotspotAnnotSigGrpDf[i, sprintf("%s_BIN", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]]) > 0
-    }
+## Update hotspots with association results
+roadmapChromStates = c("1_TssA", "2_TssAFlnk", "3_TxFlnk", "4_Tx", "5_TxWk", "6_EnhG", "7_Enh", "8_ZNF/Rpts", "9_Het", "10_TssBiv", "11_BivFlnk", "12_EnhBiv", "13_ReprPC", "14_ReprPCWk", "15_Quies", "Unk")
+roadmapChromFillColors = c(rgb(255,0,0,maxColorValue=255), rgb(255,69,0,maxColorValue=255), rgb(50,205,50,maxColorValue=255), rgb(0,128,0,maxColorValue=255), rgb(0,100,0,maxColorValue=255), rgb(194,225,5,maxColorValue=255), rgb(255,255,0,maxColorValue=255), rgb(102,205,170,maxColorValue=255), rgb(138,145,208,maxColorValue=255), rgb(205,92,92,maxColorValue=255), rgb(233,150,122,maxColorValue=255), rgb(189,183,107,maxColorValue=255), rgb(128,128,128,maxColorValue=255), rgb(192,192,192,maxColorValue=255), rgb(255,255,255,maxColorValue=255), rgb(000,000,000,maxColorValue=255))
+names(roadmapChromFillColors) = roadmapChromStates
+roadmapChromBorderColors = c(rgb(255,0,0,maxColorValue=255), rgb(255,69,0,maxColorValue=255), rgb(50,205,50,maxColorValue=255), rgb(0,128,0,maxColorValue=255), rgb(0,100,0,maxColorValue=255), rgb(194,225,5,maxColorValue=255), rgb(255,255,0,maxColorValue=255), rgb(102,205,170,maxColorValue=255), rgb(138,145,208,maxColorValue=255), rgb(205,92,92,maxColorValue=255), rgb(233,150,122,maxColorValue=255), rgb(189,183,107,maxColorValue=255), rgb(128,128,128,maxColorValue=255), rgb(192,192,192,maxColorValue=255), rgb(0,0,0,maxColorValue=255), rgb(0,0,0,maxColorValue=255))
+names(roadmapChromBorderColors) = roadmapChromStates
+roadmapChromStateLabels = c("Active TSS", "Flanking Active TSS", "Transcr. at gene 5' and 3'", "Strong transcription", "Weak transcription", "Genic enhancers", "Enhancers", "ZNF genes & repeats", "Heterochromatin", "Bivalent/Poised TSS", "Flanking Bivalent TSS/Enh", "Bivalent Enhancer", "Repressed PolyComb", "Weak Repressed PolyComb", "Quiescent/Low", "Unknown")
+names(roadmapChromStateLabels) = roadmapChromStates
+
+
+hotspotSigLabelDf = data.frame()
+for (loc in unique(hotspotSigAnnotDf$Location)) {
+    hotspotIndAnnotDf = subset(hotspotSigAnnotDf, Location == loc)
+    olGenes = subset(hotspotIndAnnotDf, Feature_type == "Transcript")$SYMBOL
+    assGenes = subset(hotspotAssSigDf, Location == loc)$Gene
+    allGenes = unique(c(olGenes, assGenes))
+    hotspotLabel = ifelse(length(allGenes) == 0, loc, paste(allGenes, collapse = ","))
+    allStates = mixedsort(unique(unlist(sapply(hotspotIndAnnotDf[1, grep("coreMarks", colnames(hotspotIndAnnotDf))], function(x) strsplit(x, ",")[[1]]))))
+    hotspotColor = roadmapChromFillColors[allStates[1]]
+    hotspotState = paste(allStates, collapse = ",")
+    hotspotSigLabelDf = with(hotspotIndAnnotDf[1,], 
+                             rbind(hotspotSigLabelDf,
+                                   data.frame(Location = loc,
+                                              space = space,
+                                              start = start,
+                                              end = end,
+                                              mcnt = mcnt,
+                                              scnt = scnt,
+                                              sids = sids,
+                                              all_adj_mcnt_p_value = all_adj_mcnt_p_value,
+                                              all_adj_scnt_p_value = all_adj_scnt_p_value,
+                                              label = hotspotLabel,
+                                              states = hotspotState,
+                                              rep_state = allStates[1],
+                                              color = hotspotColor,
+                                              stringsAsFactors = FALSE)))
 }
 
-## Hotspot distribution across cancer types
-hotspotAnnotSigGrpDf = hotspotAnnotSigGrpDf[order(hotspotAnnotSigGrpDf$all_adj_scnt_p_value),]
-hotspotAnnotSigGrpMat = log10(as.matrix(head(hotspotAnnotSigGrpDf[, c(grep("_PCT", colnames(hotspotAnnotSigGrpDf)))], 50)))
-hotspotAnnotSigGrpMat = hotspotAnnotSigGrpMat[rev(rownames(hotspotAnnotSigGrpMat)),]
-
-colfunc = colorRampPalette(c("white", "red"))
-image(t(hotspotAnnotSigGrpMat), col = colfunc(100))
-
-
-## Clustering sample-level hotspot profiles
-sampleHotspotMutProfileDf <- foreach(sampleId=unlist(sampleIdsByCancerLst), .combine = rbind) %dopar% {
-    print(sampleId)
-    sapply(1:nrow(hotspotAnnotSigGrpDf), function(x) as.integer(grepl(sampleId, hotspotAnnotSigGrpDf[x,]$sids)))
-}
-
-head(sampleHotspotMutProfileDf)
-rownames(sampleHotspotMutProfileDf) = unlist(sampleIdsByCancerLst)
-sampleHotspotMutProfileDist = dist(sampleHotspotMutProfileDf)
-sampleHotspotMutProfileHc = hclust(sampleHotspotMutProfileDist)
-#plot(sampleHotspotMutProfileHc)
-
-hclustfunc <- function(x) hclust(x, method="complete")
-distfunc <- function(x) dist(x, method="euclidean")
-
-heatmap.2(as.matrix(sampleHotspotMutProfileDf),
-          hclustfun=hclustfunc, distfun=distfunc,
-          col = c("#FFFFFF", "#FF0000"),
-          scale="none",
-          trace="none",
-          density.info="none",
-          dendrogram = "both",
-          labRow = "", labCol = "",
-          Rowv = TRUE, Colv = TRUE)
-
-#hotspotCancerProfileDf = hotspotAnnotSigGrpDf[, names(sampleIdsByCancerLst)]
-#hotspotCancerProfileDf.2 = t(hotspotCancerProfileDf)
-#hotspotCancerProfileDf.2.dist = dist(hotspotCancerProfileDf.2)
-#hotspotCancerProfileDf.2.hc = hclust(hotspotCancerProfileDf.2.dist, method="complete")
-#plot(hotspotCancerProfileDf.2.hc)
-#plot(as.phylo(hotspotCancerProfileDf.2.hc), type='fan', label.offset=0.1, no.margin=TRUE)
-
-#hotspotAnnotSigNewDf = merge(hotspotAnnotSigDf, hotspotAnnotSigGrpDf, by = c("space", "start", "end", "sids"), all.x = T)
-#hotspotAnnotSigNewDf = hotspotAnnotSigNewDf[order(hotspotAnnotSigNewDf$all_adj_scnt_p_value),]
-
-
-
-##
-## Add annotation for known cancer genes
-##
-allOncoFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/allonco/allonco_20130923.tsv")
-allOncoDf = read.delim(allOncoFile, header = T, as.is = T)
-hotspotAnnotSigDf$allOnco = ifelse(hotspotAnnotSigDf$SYMBOL %in% allOncoDf$symbol, "Y", "N")
-
-intogenDriverSignalFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/intogen/Mutational_drivers_signals.tsv")
-intogenDriverSignalDf = read.delim(intogenDriverSignalFile, header = T, as.is = T, comment.char = "#")
-hotspotAnnotSigDf$intogenDriverSignals = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverSignalDf$geneHGNCsymbol, "Y", "N")
-
-intogenDriverFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/intogen/Drivers_type_role.tsv")
-intogenDriverDf = read.delim(intogenDriverFile, header = T, as.is = T, comment.char = "#")
-hotspotAnnotSigDf$intogenDrivers = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverDf$geneHGNCsymbol, "Y", "N")
-
-cgcFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/cosmic/cancer_gene_census.csv")
-cgcDf = read.csv(cgcFile, header = T, as.is = T)
-hotspotAnnotSigDf$cosmic = ifelse(hotspotAnnotSigDf$SYMBOL %in% cgcDf$Gene.Symbol, "Y", "N")
-
-tcgaSmgFile = file.path("/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/tcga-pancan/hcd.txt")
-tcgaSmgDf = read.delim(tcgaSmgFile, header = T, as.is = T)
-hotspotAnnotSigDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotSigDf$SYMBOL %in% tcgaSmgDf$Gene.Symbol, "Y", "N")
-
-
-##
-## Add supporing evidence from HiC-like data
-##
-
-
-##
-## Save results!
-##
-hotspotAnnotFile = file.path(hotspotDir, sprintf("TCGA_16_Cancer_Types.wgs.somatic.sanitized.hotspot%d.fdr0.01.annotated.txt", distCut))
-write.table(hotspotAnnotSigDf, hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
+nrow(hotspotSigLabelDf)
+head(hotspotSigLabelDf)
 
 
 ##
 ## Plot linear genome-wide distribution of hotspots
 ##
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr**.hotspot%d.fdr0.05.annotated.txt", distCut))))
-hotspotAnnotGrpDf = data.frame()
-for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
-    cat(sprintf("Reading %s ...\n", hotspotAnnotChrFile))
-    hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
-    hotspotAnnotChrDf$allele = NULL
-    hotspotAnnotChrDf$strand = NULL
-    hotspotAnnotChrGrpDf = sqldf('SELECT space, start, end, chr_adj_scnt_p_value, wgEncodeAwgSegmentationCombinedGm12878 AS state FROM hotspotAnnotChrDf GROUP BY space, start, end ORDER BY space, start, end')
-    hotspotAnnotChrGrpDf$log10Qvalue = -log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value)
-    hotspotAnnotChrGrpDf$label = ifelse(hotspotAnnotChrGrpDf$log10Qvalue > 3,
-                                        sprintf("chr%s:%d-%d:%s", hotspotAnnotChrGrpDf$space, hotspotAnnotChrGrpDf$start, hotspotAnnotChrGrpDf$end, hotspotAnnotChrGrpDf$state), "")
-    hotspotAnnotGrpDf = rbind(hotspotAnnotGrpDf, hotspotAnnotChrGrpDf)
+for (chr in chrs) {
+    cat(sprintf("Generating a plot for the linear distribution of hotspots in chr%s ...\n", chr))
+    hotspotSigLabelChrDf = subset(hotspotSigLabelDf, space == chr)
+    hotspotSigLabelChrDf$log10Qvalue = -log10(hotspotSigLabelChrDf$all_adj_mcnt_p_value)
+    hotspotSigLabelChrDf$label = ifelse(hotspotSigLabelChrDf$log10Qvalue < 4, NA, hotspotSigLabelChrDf$label)
     baseFontSize = 15
     breakSize = 10^7 * 2
-    yBy = ceiling(max(-log10(hotspotAnnotChrDf$chr_adj_scnt_p_value)) / 5)
-    p = ggplot(hotspotAnnotChrGrpDf, aes(x = start, y = -log10(chr_adj_scnt_p_value))) + 
-        geom_hline(yintercept = seq(1, max(-log10(hotspotAnnotChrDf$chr_adj_scnt_p_value) + yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
+    yBy = ceiling(max(-log10(hotspotSigLabelChrDf$all_adj_mcnt_p_value)) / 5)
+    p = ggplot(hotspotSigLabelChrDf, aes(x = start, y = -log10(all_adj_mcnt_p_value))) + 
+        geom_hline(yintercept = seq(1, max(-log10(hotspotSigLabelChrDf$all_adj_mcnt_p_value) + 2 * yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
         geom_point(colour = "red", size = 2) + 
-        #geom_line(colour = "grey") + 
-        geom_text(aes(x = start, y = -log10(chr_adj_scnt_p_value), label = label, angle = 30, hjust = -0.03, vjust = -0.03, size = 9)) +
+        geom_text(aes(x = start, y = -log10(all_adj_mcnt_p_value), label = hotspotSigLabelChrDf$label, 
+                      colour = factor(hotspotSigLabelChrDf$rep_state), angle = 45, hjust = -0.05, vjust = -0.05, size = 9)) +
         theme(axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
               axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
               axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", hjust=1),
@@ -461,14 +463,15 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
               legend.text  = element_text(size = baseFontSize - 2, face="plain", family="sans"),
               legend.direction = "horizontal",
               legend.position = "none") +
-        scale_x_continuous(name=paste("\nGenomic position on chromosome ", hotspotAnnotChrGrpDf$space[1], " (Mb)", sep=""),
-                           breaks=seq(1, max(hotspotAnnotChrGrpDf$end), by=breakSize),
-                           limits=c(1, max(hotspotAnnotChrGrpDf$end) + breakSize),
-                           labels=as.integer(seq(0, max(hotspotAnnotChrGrpDf$end), by=breakSize)/10^6)) +
-        scale_y_continuous(name = "Significance of hotspot recurrence (-log10(P)) \n",
-                           breaks=seq(1, max(-log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value) + yBy), by=yBy),
-                           limits=c(1, max(-log10(hotspotAnnotChrGrpDf$chr_adj_scnt_p_value) + 2*yBy)))
-    hotspotAnnotChrGrpFile = gsub(".txt", ".pdf", hotspotAnnotChrFile, fixed = T)
+        scale_x_continuous(name=paste("\nGenomic position on chromosome ", hotspotSigLabelChrDf$space[1], " (Mb)", sep=""),
+                           breaks=seq(1, max(hotspotSigLabelChrDf$end), by=breakSize),
+                           limits=c(1, max(hotspotSigLabelChrDf$end) + breakSize),
+                           labels=as.integer(seq(0, max(hotspotSigLabelChrDf$end), by=breakSize)/10^6)) +
+        scale_y_continuous(name = "Significance of hotspot mutation (-log10(q)) \n",
+                           breaks=seq(1, max(-log10(hotspotSigLabelChrDf$all_adj_mcnt_p_value) + 2* yBy), by=yBy),
+                           limits=c(1, max(-log10(hotspotSigLabelChrDf$all_adj_mcnt_p_value) + 3 * yBy))) +
+        scale_fill_manual(values = roadmapChromFillColors)
+    hotspotAnnotChrGrpFile = file.path(baseDir, "figure", sprintf("Linear_distribution_of_hotspot100_fdr0.05.chr%s.pdf", chr))
     ggsave(filename = hotspotAnnotChrGrpFile, plot = p, width = 17, height = 6)
 }
 
@@ -476,10 +479,224 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
 ##
 ## Gernerate circos plot input data (hotspot p-values and labels)
 ##
-circosLogPDf = hotspotAnnotGrpDf
-circosLogPDf$logp = log10(circosLogPDf[,4])
+circosLogPDf = hotspotSigLabelDf
+circosLogPDf$log10Qvalue = log10(circosLogPDf$all_adj_mcnt_p_value)
 circosLogPDf$space = paste("hs", circosLogPDf$space, sep = "")
-circosLogPFile = file.path(circosDir, "hotspot.logp")
-write.table(circosLogPDf[, c("space", "start", "end", "logp")], circosLogPFile, row.names = F, col.names = F, sep = "\t", quote = F)
+circosLogPFile = file.path(circosDir, "hotspot.logq")
+write.table(circosLogPDf[, c("space", "start", "end", "log10Qvalue")], circosLogPFile, row.names = F, col.names = F, sep = "\t", quote = F)
 circosLabelFile = file.path(circosDir, "hotspot.label")
-write.table(subset(circosLogPDf, logp < -4)[, c("space", "start", "end", "label")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
+write.table(subset(circosLogPDf, log10Qvalue < -7)[, c("space", "start", "end", "label")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
+
+
+##
+## Check genomic and epigenomic distributions of hotspots
+##
+hotspotGenomicDistDf = data.frame()
+hotspotEpigenomicDistDf = data.frame()
+for (chr in chrs) {
+    cat(sprintf("Processing chr%s ...\n", chr))
+    hotspotChrLabelDf = subset(hotspotSigLabelDf, space == chr)
+    for (i in 1:nrow(hotspotChrLabelDf)) {
+        hotspot = hotspotChrLabelDf[i,]
+        segStates = unique(strsplit(hotspot$state, ",")[[1]])
+        segStates = segStates[segStates != ""]
+        if (length(segStates) == 0) segStates = NA
+        hotspotEpigenomicDistDf = rbind(hotspotEpigenomicDistDf,
+                                            data.frame(Location = hotspot$Location,
+                                                       all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value,
+                                                       all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value,
+                                                       state = segStates,
+                                                       stringsAsFactors = FALSE))
+        hotspotSigAnnotSubDf = subset(hotspotSigAnnotDf, Location == hotspot$Location)
+        splice_site_cnt = sum(grepl("splice", hotspotSigAnnotSubDf$Consequence))
+        exon_cnt = sum(grepl("frame", hotspotSigAnnotSubDf$Consequence))
+        five_prime_utr_cnt = sum(grepl("5_prime", hotspotSigAnnotSubDf$Consequence))
+        three_prime_utr_cnt = sum(grepl("3_prime", hotspotSigAnnotSubDf$Consequence))
+        intron_cnt = sum(grepl("intron", hotspotSigAnnotSubDf$Consequence))
+        tot_region_cnt = splice_site_cnt + exon_cnt + five_prime_utr_cnt + three_prime_utr_cnt + intron_cnt
+        if (splice_site_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "splice_site"))
+        if (exon_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "exon"))
+        if (five_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "five_prime_utr"))
+        if (three_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "three_prime_utr"))
+        if (intron_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "intron"))
+        if (tot_region_cnt == 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_scnt_p_value = hotspot$all_adj_scnt_p_value, region = "igr"))
+    }
+}
+
+hotspotGenomicDistDf = hotspotGenomicDistDf[!grepl("^Y", hotspotGenomicDistDf$Location, perl = T),]
+hotspotEpigenomicDistDf = hotspotEpigenomicDistDf[!grepl("^Y", hotspotEpigenomicDistDf$Location, perl = T),]
+hotspotGenomicDistGrpDf = sqldf('SELECT region, COUNT(*) AS cnt FROM hotspotGenomicDistDf GROUP BY region')
+hotspotGenomicDistGrpDf$freq = hotspotGenomicDistGrpDf$cnt / length(unique(hotspotGenomicDistDf$Location))
+hotspotEpigenomicDistGrpDf = sqldf('SELECT state, COUNT(*) AS cnt FROM hotspotEpigenomicDistDf GROUP BY state')
+hotspotEpigenomicDistGrpDf$freq = hotspotEpigenomicDistGrpDf$cnt / length(unique(hotspotEpigenomicDistDf$Location))
+hotspotEpigenomicDistGrpDf[1, "state"] = "Unk"
+
+
+##
+## Plot genomic and epigenomic distributions of hotspots
+##
+baseFontSize = 11
+hotspotGenomicDistGrpDf = hotspotGenomicDistGrpDf[order(-hotspotGenomicDistGrpDf$cnt),]
+p = ggplot(data = hotspotGenomicDistGrpDf, aes(x=factor(region, levels = hotspotGenomicDistGrpDf$region), y=freq)) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="\nGenomic region", labels = c("intron" = "Intron", "igr" = "Intergenic region",
+                                                         "splice_site" = "Splice region", "five_prime_utr" = "5' UTR",
+                                                         "three_prime_utr" = "3' UTR", "exon" = "Exon")) +
+    #scale_x_discrete(name="\nGenomic region") +
+    scale_y_continuous("Percentage\n", label = percent)
+hotspotGenomicDistGrpFile = file.path(baseDir, "figure", "Genomic_distribution_of_hotspot100_fdr0.05.pdf")
+ggsave(filename = hotspotGenomicDistGrpFile, plot = p, width = 8, height = 8, unit = "cm")
+
+baseFontSize = 11
+hotspotEpigenomicDistGrpDf = hotspotEpigenomicDistGrpDf[order(-hotspotEpigenomicDistGrpDf$cnt),]
+p = ggplot(data = hotspotEpigenomicDistGrpDf, aes(x=factor(state, levels = hotspotEpigenomicDistGrpDf$state), y=freq, fill = state, color = state)) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="\nChromatin state", labels = roadmapChromStateLabels) +
+    scale_y_continuous("Percentage\n", label = percent) +
+    scale_color_manual("", values = roadmapChromBorderColors) +
+    scale_fill_manual("", values = roadmapChromFillColors)
+hotspotEpigenomicDistGrpFile = file.path(baseDir, "figure", "Epigenomic_distribution_of_hotspot100_fdr0.05.pdf")
+ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 12, unit = "cm")
+
+
+##
+## Cancer distribution analysis
+##
+cancerToColorDf = data.frame(cancer = c("BRCA", "COAD", "GBM", "HNSC", "KICH", "KIRC", "KIRP", "LIHC", "LUAD", "LUSC", "OV", "READ", "SKCM", "STAD", "THCA", "UCEC"),
+                             color = c("#000000", "#0B2E82", "#006A3A", "#663E25", "#6F0042", "#913696", "#CC9DCB", "#B48541", "#CA012D", "#FF3600", "#B26345", "#01874A", "#DF54A7", "#FCBA64", "#FFC211", "#4FB0D1"))
+
+vcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
+sampleIdsByCancerLst = list()
+sampleIdToCancerDf = data.frame()
+for (vcfFile in vcfFiles) {
+    cancerType = basename(dirname(vcfFile))
+    sampleIds = samples(scanVcfHeader(vcfFile))
+    sampleIdsByCancerLst[[cancerType]] = sampleIds
+    for (sampleId in sampleIds) {
+        sampleIdToCancerDf = rbind(sampleIdToCancerDf, data.frame(id = sampleId, cancer = cancerType))
+    }
+}
+
+totSampleIds = as.vector(unlist(sampleIdsByCancerLst))
+totAbbSampleIds = as.vector(sapply(totSampleIds, function(x) paste(strsplit(x, "-")[[1]][2:3], collapse = "-")))
+sampleIdToCancerDf$sid = sapply(as.character(sampleIdToCancerDf$id), function(x) paste(strsplit(x, "-")[[1]][2:3], collapse = "-"))
+
+
+## Create color range file for ITOL
+# http://itol.embl.de/help/help.shtml
+sampleIdToCancerDf = merge(sampleIdToCancerDf, cancerToColorDf, by = "cancer")
+sampleIdToCancerDf$type = "range"
+sampleIdToCancerFile = file.path(baseDir, "table", "NJ_tree-hotspot100-fdr0.01.colors.txt")
+write.table(sampleIdToCancerDf[, c("sid", "type", "color", "cancer")], sampleIdToCancerFile, row.names = F, col.names = F, sep = "\t", quote = F)
+
+
+## Read annotated hotspot files
+hotspotChrAnnotFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotAnnotSigDf = data.frame()
+hotspotAnnotSigGrpDf = data.frame()
+for (hotspotChrAnnotFile in hotspotChrAnnotFiles) {
+    cat(sprintf("Reading %s ...\n", hotspotChrAnnotFile))
+    hotspotChrAnnotDf = read.delim(hotspotChrAnnotFile, header = T, as.is = T)
+    hotspotAnnotSigDf = rbind(hotspotAnnotSigDf, hotspotChrAnnotDf)
+    hotspotChrAnnotDf$allele = NULL
+    hotspotChrAnnotDf$strand = NULL
+    hotspotChrAnnotGrpDf = sqldf('SELECT Location, all_adj_mcnt_p_value, all_adj_scnt_p_value, sids
+                                 FROM hotspotChrAnnotDf 
+                                 GROUP BY Location ORDER BY all_adj_mcnt_p_value ASC')
+    hotspotAnnotSigGrpDf = rbind(hotspotAnnotSigGrpDf, hotspotChrAnnotGrpDf)
+}
+
+
+## Filter very significant hotspots (FDR < 0.01)
+#hotspotAnnotSigDf = hotspotAnnotSigDf[!grepl("^Y", hotspotAnnotSigDf$Location, perl = T),]
+#hotspotAnnotSigGrpDf = hotspotAnnotSigGrpDf[!grepl("^Y", hotspotAnnotSigGrpDf$Location, perl = T),]
+hotspotAnnotVerySigDf = subset(hotspotAnnotSigDf, all_adj_mcnt_p_value < 0.01)
+hotspotAnnotVerySigGrpDf = subset(hotspotAnnotSigGrpDf, all_adj_mcnt_p_value < 0.01)
+
+## Build phylogenetic tree from distances based on hotspot profiles across samples
+sampleHotspotMutProfileDf <- foreach(sampleId=totAbbSampleIds, .combine = rbind) %dopar% {
+    print(sampleId)
+    data.frame(t(sapply(1:nrow(hotspotAnnotSigGrpDf), 
+                        function(x) as.integer(grepl(sampleId, hotspotAnnotSigGrpDf[x,]$sids)))), 
+               row.names = c(sampleId))
+}
+
+sampleHotspotMutProfileDist = vegdist(sampleHotspotMutProfileDf, method = "jaccard")
+#sampleHotspotMutProfileNjTree = nj(as.dist(sampleHotspotMutProfileDist))
+#sampleHotspotMutProfileNjTree = nj(sampleHotspotMutProfileDist)
+sampleHotspotMutProfileNjTree = hclust(sampleHotspotMutProfileDist, method = "single")
+sampleHotspotMutProfileNjTreeFile = file.path(baseDir, "table", "NJ_tree-hotspot100-fdr0.05.jaccard.single.newick.txt")
+write.tree(as.phylo(sampleHotspotMutProfileNjTree), file=sampleHotspotMutProfileNjTreeFile)
+
+
+## Hotspot distribution across cancer types
+for (i in 1:nrow(hotspotAnnotSigGrpDf)) {
+    sampleIds = strsplit(hotspotAnnotSigGrpDf[i, "sids"], ",")[[1]]
+    for (c in names(sampleIdsByCancerLst)) {
+        hotspotAnnotSigGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
+        hotspotAnnotSigGrpDf[i, sprintf("%s_PCT", c)] = 100 * sum(sampleIds %in% sampleIdsByCancerLst[[c]]) / length(sampleIdsByCancerLst[[c]])
+        hotspotAnnotSigGrpDf[i, sprintf("%s_BIN", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]]) > 0
+    }
+}
+
+hotspotAnnotSigGrpDf = hotspotAnnotSigGrpDf[order(hotspotAnnotSigGrpDf$all_adj_scnt_p_value),]
+hotspotAnnotSigGrpMat = log10(as.matrix(head(hotspotAnnotSigGrpDf[, c(grep("_PCT", colnames(hotspotAnnotSigGrpDf)))], 50)))
+hotspotAnnotSigGrpMat = hotspotAnnotSigGrpMat[rev(rownames(hotspotAnnotSigGrpMat)),]
+
+colfunc = colorRampPalette(c("white", "red"))
+image(t(hotspotAnnotSigGrpMat), col = colfunc(100))
+
+
+##
+## Add annotation for known cancer genes
+##
+allOncoFile = file.path(baseDir, "allonco/allonco_20130923.tsv")
+allOncoDf = read.delim(allOncoFile, header = T, as.is = T)
+hotspotAnnotSigDf$allOnco = ifelse(hotspotAnnotSigDf$SYMBOL %in% allOncoDf$symbol, "Y", "N")
+
+intogenDriverSignalFile = file.path(baseDir, "intogen/Mutational_drivers_signals.tsv")
+intogenDriverSignalDf = read.delim(intogenDriverSignalFile, header = T, as.is = T, comment.char = "#")
+hotspotAnnotSigDf$intogenDriverSignals = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverSignalDf$geneHGNCsymbol, "Y", "N")
+
+intogenDriverFile = file.path(baseDir, "intogen/Drivers_type_role.tsv")
+intogenDriverDf = read.delim(intogenDriverFile, header = T, as.is = T, comment.char = "#")
+hotspotAnnotSigDf$intogenDrivers = ifelse(hotspotAnnotSigDf$SYMBOL %in% intogenDriverDf$geneHGNCsymbol, "Y", "N")
+
+cgcFile = file.path(baseDir, "cosmic/cancer_gene_census.csv")
+cgcDf = read.csv(cgcFile, header = T, as.is = T)
+hotspotAnnotSigDf$cosmic = ifelse(hotspotAnnotSigDf$SYMBOL %in% cgcDf$Gene.Symbol, "Y", "N")
+
+tcgaSmgFile = file.path(baseDir, "tcga-pancan/hcd.txt")
+tcgaSmgDf = read.delim(tcgaSmgFile, header = T, as.is = T)
+hotspotAnnotSigDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotSigDf$SYMBOL %in% tcgaSmgDf$Gene.Symbol, "Y", "N")
+
+
+##
+## Save hotspot list
+##
+hotspotAnnotFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.hotspot%d.fdr0.01.annotated.txt", distCut))
+write.table(hotspotAnnotSigDf[hotspotAnnotSigDf$all_adj_scnt_p_value < 0.000001,], hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
+
+

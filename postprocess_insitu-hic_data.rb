@@ -3,8 +3,8 @@
 require 'pathname'
 require 'parallel'
 
-rscript = Pathname.new("/home/sl279/BiO/Research/NoncoDiver/script/postprocess_insitu-hic_data.R")
-obsFiles = Pathname.glob("/home/sl279/BiO/Research/NoncoDiver/insitu-hic/*/100kb*/*/MAPQGE30/*.RAWobserved")
+rscript = Pathname.new("/home/sl279/BiO/Research/Hotspot/script/postprocess_insitu-hic_data.R")
+obsFiles = Pathname.glob("/home/sl279/BiO/Research/Hotspot/insitu-hic/*/100kb*inter*/*/MAPQGE30/*.RAWobserved")
 Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
   #"chr1_10kb.RAWobserved"
   #"chr10_11_100kb.RAWobserved"
@@ -47,7 +47,7 @@ Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
     cmd = <<-CMD
 bsub \\
   -g /nd/hic \\
-  -q short -W 12:0 \\
+  -q i2b2_12h \\
   -o #{lsfout} \\
   /opt/R-3.1.2/bin/Rscript #{rscript} #{binSize} #{obsFile} #{normFileA} #{normFileB} #{expFile} #{outFile}
     CMD
