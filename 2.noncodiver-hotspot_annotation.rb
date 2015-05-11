@@ -43,6 +43,7 @@ perl /home/sl279/vep/variant_effect_predictor.pl \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/insitu-hic/GSE63525_K562_HiCCUPS_looplist.annotated.bed.gz,GSE63525_K562_HiCCUPS_looplist,bed,overlap,0 \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/insitu-hic/GSE63525_KBM7_HiCCUPS_looplist.annotated.bed.gz,GSE63525_KBM7_HiCCUPS_looplist,bed,overlap,0 \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/insitu-hic/GSE63525_NHEK_HiCCUPS_looplist.annotated.bed.gz,GSE63525_NHEK_HiCCUPS_looplist,bed,overlap,0 \\
+    --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/insitu-hic/GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC.bed.gz,GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC,bed,overlap,0 \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/e-mtab-2323/TS5_CD34_promoter-other_significant_interactions.bed.gz,TS5_CD34_promoter_other_significant_interactions,bed,overlap,0 \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/e-mtab-2323/TS5_CD34_promoter-promoter_significant_interactions.bed.gz,TS5_CD34_promoter_promoter_significant_interactions,bed,overlap,0 \\
     --custom /n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/e-mtab-2323/TS5_GM12878_promoter-other_significant_interactions.bed.gz,TS5_GM12878_promoter_other_significant_interactions,bed,overlap,0 \\

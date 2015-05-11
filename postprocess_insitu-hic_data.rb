@@ -27,7 +27,8 @@ Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
                     1000000
                   end
   binSize = binPrefix.to_i * binPostfixNum
-  normTypes = %w[KR SQRTVC VC]
+  #normTypes = %w[KR SQRTVC VC]
+  normTypes = %w[SQRTVC]
   normTypes.each do |normType|
     normFileA = obsFile.dirname + "#{chrA}_#{binPrefix}#{binPostfix}b.#{normType}norm"
     normFileB = obsFile.dirname + "#{chrB}_#{binPrefix}#{binPostfix}b.#{normType}norm"
@@ -47,7 +48,7 @@ Parallel.each(obsFiles, :in_threads => 8) do |obsFile|
     cmd = <<-CMD
 bsub \\
   -g /nd/hic \\
-  -q i2b2_12h \\
+  -q short -W 12:0 \\
   -o #{lsfout} \\
   /opt/R-3.1.2/bin/Rscript #{rscript} #{binSize} #{obsFile} #{normFileA} #{normFileB} #{expFile} #{outFile}
     CMD

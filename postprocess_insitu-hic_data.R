@@ -1,3 +1,10 @@
+#binSize = 100000
+#obsFile = "/home/sl279/BiO/Research/Hotspot/insitu-hic/GM12878_combined/100kb_resolution_interchromosomal/chr7_chr17/MAPQGE30/chr7_17_100kb.RAWobserved"
+#nrm1File = "/home/sl279/BiO/Research/Hotspot/insitu-hic/GM12878_combined/100kb_resolution_interchromosomal/chr7_chr17/MAPQGE30/chr7_100kb.SQRTVCnorm"
+#nrm2File = "/home/sl279/BiO/Research/Hotspot/insitu-hic/GM12878_combined/100kb_resolution_interchromosomal/chr7_chr17/MAPQGE30/chr17_100kb.SQRTVCnorm"
+#expFile = "NA"
+#outFile = "/home/sl279/BiO/Research/Hotspot/insitu-hic/GM12878_combined/100kb_resolution_interchromosomal/chr7_chr17/MAPQGE30/chr7_17_100kb.SQRTVC.bed"
+
 args = commandArgs(TRUE)
 binSize = as.numeric(args[1])
 obsFile = args[2]
@@ -14,12 +21,21 @@ chrs = factor(chrs, level=chrs)
 cchrs = sapply(chrs, function(x) paste("chr", x, sep=""))
 cchrs = factor(cchrs, level=cchrs)
 
-refGeneFile = file.path("/home/sl279/BiO/Research/NoncoDiver/ucsc/database/refGene.txt.gz")
-refGeneDf = read.delim(gzfile(refGeneFile), header = F, as.is = T)[, c(3:6,13)]
-colnames(refGeneDf) = c("space", "strand", "start", "end", "symbol")
-refGeneDf = refGeneDf[refGeneDf$space %in% cchrs,]
-refGeneDf = with(refGeneDf, refGeneDf[order(space, start, end),])
-refGeneGr = with(refGeneDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = strand, symbol = symbol))
+refGeneFile = file.path("/home/sl279/BiO/Research/Hotspot/ucsc/database/refGene.txt.gz")
+refGeneDf = read.delim(gzfile(refGeneFile), header = F, as.is = T)[, c(2:6,13)]
+colnames(refGeneDf) = c("transcript", "space", "strand", "start", "end", "gene")
+refGeneDf$tss = with(refGeneDf, ifelse(strand == "+", start, end))
+refGenePromDf = sqldf('SELECT gene, strand, space, tss FROM refGeneDf GROUP BY gene, tss')
+prom_margin = 2000
+refGenePromDf$prom_start = refGenePromDf$tss - prom_margin
+refGenePromDf$prom_end = refGenePromDf$tss + prom_margin
+refGenePromDf$space = factor(refGenePromDf$space, levels = cchrs)
+refGenePromDf = refGenePromDf[refGenePromDf$space %in% cchrs,]
+refGenePromGr = with(refGenePromDf, sort(GRanges(seqnames = Rle(space),
+                                            IRanges(start = prom_start, end = prom_end),
+                                            strand = strand,
+                                            gene = gene,
+                                            tss = tss)))
 
 obsDf = read.delim(obsFile, header = F, col.names = c("i", "j", "c"))
 nrm1Df = read.delim(nrm1File, header = F, col.names = c("n"))
@@ -42,21 +58,21 @@ if (basename(expFile) != "NA") {
 
 ichrs = strsplit(basename(dirname(dirname(obsFile))), "_", fixed = T)[[1]]
 
-targetGrA = sort(GRanges(seqnames = Rle(ichrs[1]),
-                   IRanges(start = unique(obsDf$i + 1), end = unique(obsDf$i + binSize)),
-                   strand = "*"))
-geneHitsA = findOverlaps(targetGrA, refGeneGr)
+targetGrA = unique(sort(GRanges(seqnames = Rle(ichrs[1]),
+                                IRanges(start = unique(obsDf$i + 1), end = unique(obsDf$i + binSize)),
+                                strand = "*")))
+geneHitsA = findOverlaps(targetGrA, refGenePromGr)
 for(i in unique(queryHits(geneHitsA))) {
-    values(targetGrA)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsA[queryHits(geneHitsA) == i])]$symbol), collapse = "|")
+    values(targetGrA)[i, "genes"] = paste(unique(refGenePromGr[subjectHits(geneHitsA[queryHits(geneHitsA) == i])]$gene), collapse = "|")
 }
 targetDfA = as.data.frame(targetGrA)
 
-targetGrB = sort(GRanges(seqnames = Rle(ichrs[length(ichrs)]),
-                   IRanges(start = unique(obsDf$j + 1), end = unique(obsDf$j + binSize)),
-                   strand = "*"))
-geneHitsB = findOverlaps(targetGrB, refGeneGr)
+targetGrB = unique(sort(GRanges(seqnames = Rle(ichrs[length(ichrs)]),
+                                IRanges(start = unique(obsDf$j + 1), end = unique(obsDf$j + binSize)),
+                                strand = "*")))
+geneHitsB = findOverlaps(targetGrB, refGenePromGr)
 for(i in unique(queryHits(geneHitsB))) {
-    values(targetGrB)[i, "symbols"] = paste(unique(refGeneGr[subjectHits(geneHitsB[queryHits(geneHitsB) == i])]$symbol), collapse = "|")
+    values(targetGrB)[i, "genes"] = paste(unique(refGenePromGr[subjectHits(geneHitsB[queryHits(geneHitsB) == i])]$gene), collapse = "|")
 }
 targetDfB = as.data.frame(targetGrB)
 
@@ -66,17 +82,17 @@ obsDf$endA = as.integer(obsDf$i + binSize)
 obsDf$chrB = ichrs[length(ichrs)]
 obsDf$startB = as.integer(obsDf$j + 1)
 obsDf$endB = as.integer(obsDf$j + binSize)
-obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, o.chrB, o.startB, o.endB, o.c, o.nc, o.loe, t.symbols AS symbolsA
+obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, o.chrB, o.startB, o.endB, o.c, o.nc, o.loe, t.genes AS genesA
               FROM obsDf AS o
               LEFT JOIN targetDfA AS t
               ON o.chrA = t.seqnames AND o.startA = t.start AND o.endA = t.end')
-obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, symbolsA, o.chrB, o.startB, o.endB, o.c, o.nc, o.loe, t.symbols AS symbolsB
+obsDf = sqldf('SELECT o.chrA, o.startA, o.endA, genesA, o.chrB, o.startB, o.endB, o.c, o.nc, o.loe, t.genes AS genesB
               FROM obsDf AS o
               LEFT JOIN targetDfB AS t
               ON o.chrB = t.seqnames AND o.startB = t.start AND o.endB = t.end')
-obsSigDf = obsDf[obsDf$nc > as.numeric(quantile(obsDf$c, 0.99)),]
-bedDf = with(obsSigDf, rbind(data.frame(space = chrA, start = startA, end = endA, partner = paste(chrB, startB, endB, c, nc, loe, symbolsB, sep = "_")),
-                             data.frame(space = chrB, start = startB, end = endB, partner = paste(chrA, startA, endA, c, nc, loe, symbolsA, sep = "_"))))
-bedGrpDf = sqldf('SELECT * FROM bedDf GROUP BY space, start, end, partner ORDER BY space, start, end, partner ASC')
-write.table(bedGrpDf, outFile, sep = "\t", row.names=F, col.names=F, quote=FALSE)
+obsSigDf = obsDf[obsDf$nc > as.numeric(quantile(obsDf$nc, 0.999)) & obsDf$c > as.numeric(quantile(obsDf$c, 0.999)),]
+bedDf = with(obsSigDf, rbind(data.frame(space = chrA, start = startA, end = endA, partner = paste(chrB, startB, endB, c, nc, loe, genesB, sep = "_")),
+                             data.frame(space = chrB, start = startB, end = endB, partner = paste(chrA, startA, endA, c, nc, loe, genesA, sep = "_"))))
+bedDf = with(bedDf, bedDf[order(space, start, end),])
+write.table(bedDf, outFile, sep = "\t", row.names=F, col.names=F, quote=FALSE)
 

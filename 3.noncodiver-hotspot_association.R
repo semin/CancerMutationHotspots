@@ -1,5 +1,5 @@
 args = commandArgs(TRUE)
-annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/chrs/17/Combined.wgs.somatic.chr17.hotspot100.fdr0.05.annotated.00090.txt"
+#annotFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/chrs/17/Combined.wgs.somatic.chr17.hotspot100.fdr0.05.annotated.00090.txt"
 
 annotFile = args[1]
 
@@ -127,6 +127,7 @@ assColNames = c("distalDhsToPromoterDhs",
                 "GSE63525_K562_HiCCUPS_looplist",
                 "GSE63525_KBM7_HiCCUPS_looplist",
                 "GSE63525_NHEK_HiCCUPS_looplist",
+                "GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC",
                 "TS5_CD34_promoter_other_significant_interactions",
                 "TS5_CD34_promoter_promoter_significant_interactions",
                 "TS5_GM12878_promoter_other_significant_interactions",
@@ -148,7 +149,12 @@ for (i in 1:nrow(annotGrpDf)) {
                                                         function(x) strsplit(x, "_", fixed = T)[[1]][4]),
                                                  function(y) strsplit(y, "|", fixed = T)[[1]])))
                 suppGenes = suppGenes[suppGenes != "NA"]
-            } else if (grepl("GSE63525", assColName)) {
+            } else if (grepl("_inter_", assColName)) {
+                suppGenes = unique(unlist(sapply(sapply(strsplit(annotGrpDf[i, assColName], ",")[[1]],
+                                                        function(x) strsplit(x, "_", fixed = T)[[1]][7]),
+                                                 function(y) strsplit(y, "|", fixed = T)[[1]])))
+                suppGenes = suppGenes[suppGenes != "NA"]
+            } else if (grepl("HiCCUPS_looplist", assColName)) {
                 suppGenes = unique(unlist(sapply(strsplit(annotGrpDf[i, assColName], ",", fixed = T)[[1]],
                                                  function(x) strsplit(x, "|", fixed = T)[[1]])))
                 suppGenes = suppGenes[suppGenes != "NA"]
