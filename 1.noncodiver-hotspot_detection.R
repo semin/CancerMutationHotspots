@@ -1,6 +1,6 @@
-#scntFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/Combined.wgs.somatic.chr5.scnt.txt"
-#scntSelGrpFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/Combined.wgs.somatic.chr5.hotspot100.txt"
-#scntSelGrpVepFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/NoncoDiver/hotspot/Combined.wgs.somatic.chr5.hotspot100.vep_in.txt"
+#scntFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.scnt.txt"
+#scntSelGrpFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.hotspot100.txt"
+#scntSelGrpVepFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.hotspot100.vep_in.txt"
 #distCut = 100
 #hotspotMargin = 50
 #poisMargin = 5000
@@ -30,7 +30,7 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 ## Initialize global variables
 ##
 rootDir = "/home/sl279"
-baseDir = file.path(rootDir, "BiO/Research/NoncoDiver")
+baseDir = file.path(rootDir, "BiO/Research/Hotspot")
 vcfDir = file.path(baseDir, "vcf")
 panVcfDir = file.path(vcfDir, "pancan")
 figDir = file.path(baseDir, "figure")

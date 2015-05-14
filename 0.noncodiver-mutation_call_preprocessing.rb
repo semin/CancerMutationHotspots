@@ -9,7 +9,7 @@ $logger.level     = Logger::DEBUG
 
 $java7_bin        = Pathname.new("/opt/java/jdk1.7.0_71/bin/java")
 $home_dir         = Pathname.new("/home/sl279")
-$base_dir         = $home_dir + "BiO/Research/NoncoDiver"
+$base_dir         = $home_dir + "BiO/Research/Hotspot"
 $script_dir       = $base_dir + "script"
 $vcf_dir          = $base_dir + "vcf"
 $install_dir      = $home_dir + "BiO/Install"
@@ -294,7 +294,7 @@ end
 def extract_mutation_count
   vcfs = Pathname.glob($vcf_dir + "pancan/*sanitized.vcf.gz").sort
   Parallel.each(vcfs, :in_processes => 8) do |vcf|
-    mcntFile = $hotspot_dir + "TCGA" + vcf.basename(".gz").sub_ext(".scnt.alt_expanded.txt")
+    mcntFile = $base_dir + "tcga" + vcf.basename(".gz").sub_ext(".snv.txt")
     puts mcntFile
     mcntFile.open('w') do |file|
       sampleIds = []
@@ -308,10 +308,6 @@ def extract_mutation_count
           chrom, pos, id, ref, alt, qual, filter, info, format, *genos = line.chomp.split("\t")
           alts = alt.split(",")
           genos = genos.map { |g| g.split(":")[0].split("/") }
-          caddrs = info.match(/CADD_RAW=(\S+?);/)[1].split(",")
-          caddps = info.match(/CADD_PHRED=(\S+?);/)[1].split(",")
-          mcaddrs = (alts.size != caddrs.size) ? Array.new(alts.size, caddrs[0]) : caddrs
-          mcaddps = (alts.size != caddps.size) ? Array.new(alts.size, caddps[0]) : caddps
           nalts = []
           scnts = []
           nsids = []
@@ -321,19 +317,11 @@ def extract_mutation_count
             gt = (ai + 1).to_s
             sids = sampleIds.values_at(*(genos.each_index.select{ |i| genos[i].include?(gt) }))
             if (sids.size > 0)
-              file.puts [chrom, pos, ref, a, sids.join(",")].join("\t")
+              sids.each do |sid|
+                file.puts [chrom, pos, ref, a, sid].join("\t")
+              end
             end
-            #if (sids.size > 0)
-              #nalts << a
-              #nsids[ai] = sids.join(";")
-              #scnts[ai] = sids.size
-              #ncaddr[ai] = mcaddrs[ai]
-              #ncaddp[ai] = mcaddps[ai]
-            #end
           end
-          #file.puts [chrom, pos, ref,
-                     #nalts.join(","), scnts.join(","), nsids.join(","),
-                     #ncaddr.join(","), ncaddp.join(",")].join("\t")
         end
       end
     end
@@ -406,7 +394,7 @@ if __FILE__ == $0
   #split_vcfs_by_chr
   #sanitize_vcfs(Pathname.glob($vcf_dir + "pancan/*.somatic.chr*.vcf.gz").sort)
   #split_vcfs_by_recurrence
-  #extract_mutation_count
+  extract_mutation_count
   #expand_vep_out
   #extract_wgs_mutations_from_stratton_call_sets
 end

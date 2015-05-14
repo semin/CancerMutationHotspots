@@ -32,70 +32,156 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 rootDir = "/home/sl279"
 baseDir = file.path(rootDir, "BiO/Research/Hotspot")
 imageFile = file.path(baseDir, "script/0.noncodiver-control_tower.RData")
-#load(imageFile)
+load(imageFile)
 #save.image(imageFile)
 
 vcfDir = file.path(baseDir, "vcf")
-hotspotDir = file.path(vcfDir, "pancan")
 hotspotDir = file.path(baseDir, "hotspot")
-gdacDir = file.path(baseDir, "gdac")
 sangDir = file.path(baseDir, "sanger")
+icgcDir = file.path(baseDir, "icgc")
+tcgaDir = file.path(baseDir, "tcga")
+gdacDir = file.path(baseDir, "gdac")
 gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
 circosDir = file.path(baseDir, "circos")
 
-chrs = c(1:22, "X", "Y")
+chrs = c(1:22, "X")
 chrs = factor(chrs, level=chrs)
 cchrs = sapply(chrs, function(x) paste("chr", x, sep=""))
 cchrs = factor(cchrs, level=cchrs)
 distCut = 100
 
+##
 ## Load chrom size information
+##
 hg19File = file.path(baseDir, "ucsc/database/hg19.genome")
 hg19Df = read.delim(hg19File, header=T, as.is=T)
 hg19Df = hg19Df[hg19Df$chrom %in% chrs,]
 hg19Df$chrom = factor(hg19Df$chrom, levels=chrs)
 hg19Df = hg19Df[order(hg19Df$chrom),]
+hg19Df$start = 1
+hg19Df$end = hg19Df$size
+hg19Gr = with(hg19Df, GRanges(seqnames = Rle(chrom), IRanges(start = start, end = end), strand = "*"))
+
 
 ##
-## Combine TCGA and Stratton mutation call sets
+## Combine TCGA, Stratton, and ICGC mutation call sets
 ##
 
-## Read alt expanded TCGA mutation call sets
-tcgaChrScntFiles = mixedsort(Sys.glob(file.path(hotspotDir, "TCGA", "*.alt_expanded.txt")))
-tcgaAllScntDf = data.frame()
-for (tcgaChrScntFile in tcgaChrScntFiles) {
-    print(tcgaChrScntFile)
-    tcgaChrScntDf = read.delim(tcgaChrScntFile, header = F, as.is = T)
-    colnames(tcgaChrScntDf) = c("space", "pos", "ref", "alt", "sid")
-    tcgaAllScntDf = rbind(tcgaAllScntDf, tcgaChrScntDf)
-}
-
-
-## Read Stratton call sets
-sangCanWgsFiles = Sys.glob(file.path(sangDir, "somatic_mutation_data/*/*.wgs.txt"))
-sangAllWgsDf = data.frame()
-for (sangCanWgsFile in sangCanWgsFiles) {
-    print(sangCanWgsFile)
-    if (file.info(sangCanWgsFile)$size > 0) {
-        sangCanWgsDf = read.delim(sangCanWgsFile, header = F, as.is = T)[, c(3, 4, 6, 7, 1)]
-        colnames(sangCanWgsDf) = c("space", "pos", "ref", "alt", "sid")
-        if (nrow(sangCanWgsDf) > 0) {
-            sangAllWgsDf = rbind(sangAllWgsDf, sangCanWgsDf)
-        }
+## Read ICGA release 18 WGS SNV call sets
+icgcWgsSnvFiles = mixedsort(Sys.glob(file.path(baseDir, "icgc", "release_18", "*.wgs.snv.tsv")))
+icgcWgsSnvAllDf = data.frame()
+for (icgcWgsSnvFile in icgcWgsSnvFiles) {
+    if (file.info(icgcWgsSnvFile)$size > 0) {
+        cat(sprintf("Reading %s ...\n", icgcWgsSnvFile))
+        icgcWgsSnvDf = read.delim(icgcWgsSnvFile, header = T, as.is = T)
+        colnames(icgcWgsSnvDf) = c("icgc_mutation_id", "icgc_donor_id", "project_code", "icgc_specimen_id", "icgc_sample_id",
+                                   "matched_icgc_sample_id", "submitted_sample_id", "submitted_matched_sample_id", 
+                                   "chromosome", "chromosome_start", "chromosome_end", 
+                                   "reference_genome_allele", "mutated_from_allele", "mutated_to_allele", 
+                                   "consequence_type", "sequencing_strategy")
+        icgcWgsSnvGrpDf = sqldf('SELECT * FROM icgcWgsSnvDf 
+                                GROUP BY submitted_sample_id, chromosome, chromosome_start, chromosome_end,
+                                reference_genome_allele, mutated_from_allele, mutated_to_allele')
+        icgcWgsSnvAllDf = rbind(icgcWgsSnvAllDf, icgcWgsSnvGrpDf)
     }
 }
 
-## Combine TCGA and Stratton call sets and generate hotspot input file
-totSnvsDf = rbind(tcgaAllScntDf, sangAllWgsDf)
-totSnvGrpDf = sqldf('SELECT space, pos, ref, alt, group_concat(sid) AS sids FROM totSnvsDf GROUP BY space, pos, ref, alt')
+icgcWgsSnvAllDf$cancer = gsub("(\\w+)-\\w+", "\\1", icgcWgsSnvAllDf$project_code)
+icgcWgsSnvAllDf$source = "ICGC"
+
+length(unique(icgcWgsSnvAllDf$sid))
+
+
+## Read alt expanded TCGA mutation call sets
+tcgaVcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
+tcgaSampleIdsByCancerLst = list()
+tcgaSampleIdToCancerDf = data.frame()
+for (tcgaVcfFile in tcgaVcfFiles) {
+    cat(sprintf("Reading %s ...\n", tcgaVcfFile))
+    cancerType = basename(dirname(tcgaVcfFile))
+    tcgaSampleIds = samples(scanVcfHeader(tcgaVcfFile))
+    tcgaSampleIdsByCancerLst[[cancerType]] = tcgaSampleIds
+    for (tcgaSampleId in tcgaSampleIds) {
+        tcgaSampleIdToCancerDf = rbind(tcgaSampleIdToCancerDf, data.frame(sid = tcgaSampleId, cancer = cancerType))
+    }
+}
+tcgaSampleIdToCancerDf$project = tcgaSampleIdToCancerDf$cancer
+
+tcgaWgsSnvChrFiles = mixedsort(Sys.glob(file.path(tcgaDir, "*.snv.txt")))
+tcgaWgsSnvAllDf = data.frame()
+for (tcgaWgsSnvChrFile in tcgaWgsSnvChrFiles) {
+    cat(sprintf("Reading %s ...\n", tcgaWgsSnvChrFile))
+    tcgaWgsSnvChrDf = read.delim(tcgaWgsSnvChrFile, header = F, as.is = T)
+    colnames(tcgaWgsSnvChrDf) = c("space", "pos", "ref", "alt", "sid")
+    tcgaWgsSnvAllDf = rbind(tcgaWgsSnvAllDf, tcgaWgsSnvChrDf)
+}
+tcgaWgsSnvAllDf$sid = gsub("^H_\\w{2}", "TCGA", tcgaWgsSnvAllDf$sid)
+tcgaWgsSnvAllDf$sid = gsub("345a06d6-fa5c-4674-a847-88a6b537cf3c", "TCGA-KN-8437-01A-11D-2310-10", tcgaWgsSnvAllDf$sid)
+#grep("TCGA", tcgaWgsSnvAllDf$sid, invert = T, value = T)
+tcgaWgsSnvAllDf$source = "TCGA"
+tcgaWgsSnvAllDf = merge(tcgaWgsSnvAllDf, tcgaSampleIdToCancerDf, by = ("sid"), all.x = T)
+#length(unique(tcgaWgsSnvAllDf$sid))
+
+
+## Read Stratton call sets
+sangCanWgsSnvFiles = Sys.glob(file.path(sangDir, "somatic_mutation_data/*/*.wgs.txt"))
+sangAllWgsSnvDf = data.frame()
+for (sangCanWgsSnvFile in sangCanWgsSnvFiles) {
+    if (file.info(sangCanWgsSnvFile)$size > 0) {
+        cat(sprintf("Reading %s ...\n", sangCanWgsSnvFile))
+        if (grepl("ALL", basename(sangCanWgsSnvFile))) { cancer = "ALL" }
+        else if (grepl("AML", basename(sangCanWgsSnvFile))) { cancer = "ALL" }
+        else if (grepl("Breast", basename(sangCanWgsSnvFile))) { cancer = "BRCA" }
+        else if (grepl("CLL", basename(sangCanWgsSnvFile))) { cancer = "CLL" }
+        else if (grepl("Liver", basename(sangCanWgsSnvFile))) { cancer = "LICA" }
+        else if (grepl("Lung", basename(sangCanWgsSnvFile))) { cancer = "LUAD" }
+        else if (grepl("B-cell", basename(sangCanWgsSnvFile))) { cancer = "BCL" }
+        else if (grepl("Medullo", basename(sangCanWgsSnvFile))) { cancer = "MBL" }
+        else if (grepl("Pancreas", basename(sangCanWgsSnvFile))) { cancer = "PACA" }
+        else if (grepl("Pilocytic", basename(sangCanWgsSnvFile))) { cancer = "PA" }
+        sangCanWgsSnvDf = read.delim(sangCanWgsSnvFile, header = F, as.is = T)[, c(3, 4, 6, 7, 1)]
+        colnames(sangCanWgsSnvDf) = c("space", "pos", "ref", "alt", "sid")
+        sangCanWgsSnvDf$cancer = cancer
+        sangCanWgsSnvDf$project = cancer
+        if (nrow(sangCanWgsSnvDf) > 0) {
+            sangAllWgsSnvDf = rbind(sangAllWgsSnvDf, sangCanWgsSnvDf)
+        }
+    }
+}
+sangAllWgsSnvDf$source = "Sanger"
+#length(unique(sangAllWgsSnvDf$sid))
+
+
+## Combined all SNVs into one data.frame
+wgsSnvAllDf = data.frame()
+wgsSnvAllDf = rbind(wgsSnvAllDf, data.frame(icgcWgsSnvAllDf[, c("source", "cancer", "project_code", "submitted_sample_id",
+                                                                "chromosome", "chromosome_start", 
+                                                                "reference_genome_allele", "mutated_to_allele")]))
+colnames(wgsSnvAllDf) = c("source", "cancer", "project", "sid", "space", "pos", "ref", "alt")
+wgsSnvAllDf = rbind(wgsSnvAllDf, tcgaWgsSnvAllDf[, colnames(wgsSnvAllDf)])
+wgsSnvAllDf = rbind(wgsSnvAllDf, sangAllWgsSnvDf[, colnames(wgsSnvAllDf)])
+
+length(unique(wgsSnvAllDf$sid))
+length(unique(wgsSnvAllDf$cancer))
+
+
+##
+## Basic statistics for sample distribution and mutation rates
+##
+
+
+##
+## Collapse combined SNVs
+##
+wgsSnvAllGrpDf = sqldf('SELECT space, pos, ref, alt, group_concat(sid) AS sids FROM wgsSnvAllDf GROUP BY space, pos, ref, alt')
 for (chr in chrs) {
-    totSnvGrpChrDf = subset(totSnvGrpDf, space == chr)
-    totSnvGrpChrDf$scnt = sapply(totSnvGrpChrDf$sid, function(x) length(strsplit(x, ",")[[1]]))
-    totSnvGrpChrFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.txt", chr))
-    cat(sprintf("Writing %s ...\n", totSnvGrpChrFile))
-    write.table(totSnvGrpChrDf, totSnvGrpChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
+    wgsSnvAllGrpChrDf = subset(wgsSnvAllGrpDf, space == chr)
+    wgsSnvAllGrpChrDf$scnt = sapply(wgsSnvAllGrpChrDf$sid, function(x) length(strsplit(x, ",")[[1]]))
+    wgsSnvAllGrpChrFile = file.path(hotspotDir, sprintf("cancer.wgs.somatic.snv.chr%s.txt", chr))
+    cat(sprintf("Writing %s ...\n", wgsSnvAllGrpChrFile))
+    write.table(wgsSnvAllGrpChrDf, wgsSnvAllGrpChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
 }
 
 
@@ -173,10 +259,13 @@ for (promIntFile in promIntFiles) {
 ## Postprocess insitu-HiC HiCCUPS loop lists
 ##
 refGeneFile = file.path(baseDir, "ucsc/database/refGene.txt.gz")
-refGeneDf = read.delim(gzfile(refGeneFile), header = F, as.is = T)[, c(2:6,13)]
-colnames(refGeneDf) = c("transcript", "space", "strand", "start", "end", "gene")
-refGeneDf$tss = with(refGeneDf, ifelse(strand == "+", start, end))
-refGenePromDf = sqldf('SELECT gene, strand, space, tss FROM refGeneDf GROUP BY gene, tss')
+refGeneDf = read.delim(gzfile(refGeneFile), header = F, as.is = T)
+colnames(refGeneDf) = c("bin", "name", "chrom", "strand", "txStart", "txEnd", "cdsStart", "cdsEnd",
+                        "exonCount", "exonStarts", "exonEnds", "score", "name2", "cdsStartStat", "cdsEndStat", "exonFrames")
+refGeneSelDf = refGeneDf[, c(2:6,13)]
+colnames(refGeneSelDf) = c("transcript", "space", "strand", "start", "end", "gene")
+refGeneSelDf$tss = with(refGeneSelDf, ifelse(strand == "+", start, end))
+refGenePromDf = sqldf('SELECT gene, strand, space, tss FROM refGeneSelDf GROUP BY gene, tss')
 prom_margin = 2000
 refGenePromDf$prom_start = refGenePromDf$tss - prom_margin
 refGenePromDf$prom_end = refGenePromDf$tss + prom_margin
@@ -233,10 +322,12 @@ for (loopFile in loopFiles) {
 ##
 ## Expand vep_out files using Ruby script
 ##
+
 # ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/2.noncodiver-expand_vep_out.rb $f > $f.expanded;done
 
-
+##
 ## Read VEP output and filter out suspicious hotspots overlapping segmental duplications and simple repeats
+##
 hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut))))
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
@@ -256,7 +347,9 @@ rm(hotspotSigVepOutChrDf)
 rm(hotspotSigVepOutMergedDf)
 
 
+##
 ## Postprocess VEP annotated hotspots
+##
 hotspotSigAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
 hotspotSigAnnotDf = data.frame()
 for (hotspotSigAnnotChrFile in hotspotSigAnnotChrFiles) {
@@ -528,7 +621,7 @@ for (chr in chrs) {
 ##
 ## Gernerate circos plot input data (hotspot p-values and labels)
 ##
-col2rgbLabel = function(cl) apply(col2rgb(sapply(cl, function(x)x[1])), 2, function(n)paste(n, collapse = ","))
+col2rgbLabel = function(cl) apply(col2rgb(sapply(cl, function(x)x[1])), 2, function(n) paste(n, collapse = ","))
 circosLogPDf = hotspotSigAssAnnotDf
 circosLogPDf$log10Qvalue = log10(circosLogPDf$all_adj_mcnt_p_value)
 circosLogPDf$space = paste("hs", circosLogPDf$space, sep = "")
@@ -555,7 +648,69 @@ write.table(subset(circosLogPDf, log10Qvalue < -4)[, c("space", "start", "end", 
 
 
 ##
-## Check genomic and epigenomic distributions of hotspots
+## Check enrichment of hotspots in genomic and epigenomic features
+##
+source("http://www.pmc.ucsc.edu/~mclapham/Rtips/G%20test.txt")
+refGeneDf$space = gsub("chr", "", refGeneDf$chrom)
+refGeneDf = refGeneDf[refGeneDf$space %in% chrs,]
+refGeneDf$space = factor(refGeneDf$space, levels = chrs)
+refGeneDf$FiveUtrStart = ifelse(refGeneDf$strand == "+", refGeneDf$txStart, refGeneDf$cdsEnd)
+refGeneDf$FiveUtrEnd = ifelse(refGeneDf$strand == "+", refGeneDf$cdsStart, refGeneDf$txEnd)
+refGeneDf$ThreeUtrStart = ifelse(refGeneDf$strand == "+", refGeneDf$cdsEnd, refGeneDf$txStart)
+refGeneDf$ThreeUtrEnd = ifelse(refGeneDf$strand == "+", refGeneDf$txEnd, refGeneDf$cdsStart)
+
+chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE)) 
+refGeneChunks = chunk(1:nrow(refGeneDf), 10)
+refGeneExonSpliceDf <- foreach(j=1:length(refGeneChunks), .combine = rbind) %dopar% {
+    cat(sprintf("Processing chunk #%d (out of %d) ...\n", j, length(refGeneChunks)))
+    refGeneExonSpliceChunkDf = data.frame()
+    for (i in refGeneChunks[[j]]) {
+        exonStartPos = as.numeric(strsplit(refGeneDf[i, "exonStarts"], ",", fixed = T)[[1]])
+        exonEndPos = as.numeric(strsplit(refGeneDf[i, "exonEnds"], ",", fixed = T)[[1]])
+        refGeneExonSpliceChunkDf = with(refGeneDf[i,], rbind(refGeneExonSpliceChunkDf,
+                                                             data.frame(type = "exon", space = space, strand = strand, start = exonStartPos, end = exonEndPos)))
+        if (refGeneDf[i, "exonCount"] > 1) {
+            if (refGeneDf[i, "strand"] == "+") {
+                exonDStarts = exonEndPos[1:(length(exonEndPos)-1)]
+                exonAStarts = exonStartPos[2:length(exonStartPos)]
+                spliceDStarts = exonDStarts - 2
+                spliceDEnds = exonDStarts + 8
+                spliceAStarts = exonAStarts - 8
+                spliceAEnds = exonAStarts + 2
+            } else if (refGeneDf[i, "strand"] == "-") {
+                exonAStarts = exonEndPos[1:(length(exonEndPos)-1)]
+                exonDStarts = exonStartPos[2:length(exonStartPos)]
+                spliceDStarts = exonDStarts - 8
+                spliceDEnds = exonDStarts + 2
+                spliceAStarts = exonAStarts - 2
+                spliceAEnds = exonAStarts + 8
+            }
+            refGeneExonSpliceChunkDf = with(refGeneDf[i,], rbind(refGeneExonSpliceChunkDf, 
+                                                                 data.frame(type = "splice", space = space, strand = strand, start = spliceDStarts, end = spliceDEnds)))
+            refGeneExonSpliceChunkDf = with(refGeneDf[i,], rbind(refGeneExonSpliceChunkDf, 
+                                                                 data.frame(type = "splice", space = space, strand = strand, start = spliceAStarts, end = spliceAEnds)))
+        }
+    }
+    refGeneExonSpliceChunkDf
+}
+
+refGene5utrGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = FiveUtrStart, end = FiveUtrEnd), strand = "*"))))
+refGene3utrGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = FiveUtrStart, end = FiveUtrEnd), strand = "*"))))
+refGeneExonDf = subset(refGeneExonSpliceDf, type == "exon")
+refGeneExonGr = unique(sort(with(refGeneExonDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = "*"))))
+refGeneSpliceDf = subset(refGeneExonSpliceDf, type == "splice")
+refGeneSpliceGr = unique(sort(with(refGeneSpliceDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = "*"))))
+refGeneTrsGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = txStart, end = txEnd), strand = "*"))))
+refGeneIgrGr = setdiff(hg19Gr, refGeneTrsGr)
+refGeneIntronGr = setdiff(refGeneTrsGr, refGeneExonGr)
+
+hotspotAbbDf = hotspotSigAssAnnotDf[, c("space", "start", "end", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value")]
+hotspotAbbDf = hotspotAbbDf[hotspotAbbDf$space %in% chrs,]
+hotspotAbbGr = as(as(hotspotAbbDf, "RangedData"), "GRanges")
+
+
+##
+##
 ##
 hotspotGenomicDistDf = data.frame()
 hotspotEpigenomicDistDf = data.frame()
@@ -651,24 +806,40 @@ ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 1
 ##
 
 ## Exonic (Active Transcript)
-#hotspotExonicDf = subset(hotspotSigAssAnnotDf, grepl("exon", types) & !grepl("utr", types) & !grepl("splice", types) & overlapping_genes != "")
 hotspotExonicDf = subset(hotspotSigAssAnnotDf, grepl("exon", types) & !grepl("utr", types))
 nrow(hotspotExonicDf)
 names(hotspotExonicDf)
 head(hotspotExonicDf[, c(1, 5, 6, 8:11, 14)], 20)
 tail(hotspotExonicDf[, c(1, 5, 6, 8:11, 14)], 10)
 
+#write.table(head(hotspotSigAssAnnotDf[, c("Location", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value", "overlapping_genes", "cis_genes", "states")], 1000),
+write.table(head(hotspotSigAssAnnotDf, 1000),
+            file = "hotspot1000.txt", row.names = F, col.names = T, sep = "\t", quote = F)
+
 #loc = "X:18122607-18122755"
 #hotspotSubDf = subset(hotspotExonicDf, Location == loc)
+nrow(hotspotSigAssAnnotDf)
+
+gene = "CTNNB1"
+testHotDf = subset(hotspotSigAssAnnotDf, grepl(gene, cis_genes) | grepl(gene, overlapping_genes))
+head(testHotDf[, c("Location", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value", "overlapping_genes", "cis_genes", "states")], 20)
 
 ## Promoter (TSS)
 
 ##
 ## Trans-interactions bewteen distal elements and promoters
 ##
-#enhDf = subset(hotspotSigAssAnnotDf, overlapping_genes == "" & cis_genes == "" & trans_genes != "" & grepl("Enh", states) & !grepl("Tss", states) & !grepl("Tx", states))
-#nrow(enhDf)
-#head(enhDf)
+tssDf = subset(hotspotSigAssAnnotDf, cis_genes != "" & grepl("Tss", states))
+nrow(tssDf)
+head(tssDf[, c("Location", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value", "overlapping_genes", "cis_genes", "states")], 20)
+
+enhDf = subset(hotspotSigAssAnnotDf, cis_genes != "" & grepl("Enh", states) & !grepl("Tss", states))
+nrow(enhDf)
+head(enhDf[, c("Location", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value", "overlapping_genes", "cis_genes", "states")], 20)
+
+ctcfDf = subset(hotspotSigAssAnnotDf, cis_genes != "" & grepl("ZNF", states) & !grepl("Tss", states))
+nrow(ctcfDf)
+head(ctcfDf[, c("Location", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value", "overlapping_genes", "cis_genes", "states")], 20)
 
 
 ##
