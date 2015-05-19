@@ -13,7 +13,7 @@ Parallel.each(annotFiles, :in_threads => 10) do |annotFile|
   cmd =<<-CMD
       bsub \\
         -g /hot/ass \\
-        -q short -W 12:0 \\
+        -q i2b2_12h -W 12:0 \\
         -o #{lsfout} \\
         xvfb-run -a /opt/R-3.1.2/bin/Rscript #{rScript} #{annotFile}
   CMD

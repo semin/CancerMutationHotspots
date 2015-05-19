@@ -4,7 +4,7 @@ require 'pathname'
 
 distCut = 100
 baseDir = Pathname.new "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot"
-hotspotChrVepSigFiles = Pathname.glob(baseDir + "hotspot" + "Combined*hotspot#{distCut}.fdr0.05.vep_in.txt")
+hotspotChrVepSigFiles = Pathname.glob(baseDir + "hotspot" + "cancer*hotspot#{distCut}.fdr0.01.vep_in.txt")
 hotspotChrVepSigFiles.each do |hotspotChrVepSigFile|
   hotspotChrVepSigOutFile = hotspotChrVepSigFile.dirname + hotspotChrVepSigFile.basename(".txt").sub_ext(".vep_out.txt")
   hotspotChrVepSigLsfOutFile = hotspotChrVepSigOutFile.sub_ext(".txt.lsfout")

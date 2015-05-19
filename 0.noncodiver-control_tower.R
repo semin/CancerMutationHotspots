@@ -25,6 +25,10 @@ require(GenomicRanges)
 require(VariantAnnotation)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
+##
+## Custom functions
+##
+chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE)) 
 
 ##
 ## Initialize global variables
@@ -91,8 +95,6 @@ for (icgcWgsSnvFile in icgcWgsSnvFiles) {
 icgcWgsSnvAllDf$cancer = gsub("(\\w+)-\\w+", "\\1", icgcWgsSnvAllDf$project_code)
 icgcWgsSnvAllDf$source = "ICGC"
 
-length(unique(icgcWgsSnvAllDf$sid))
-
 
 ## Read alt expanded TCGA mutation call sets
 tcgaVcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
@@ -154,7 +156,7 @@ sangAllWgsSnvDf$source = "Sanger"
 #length(unique(sangAllWgsSnvDf$sid))
 
 
-## Combined all SNVs into one data.frame
+## cancer all SNVs into one data.frame
 wgsSnvAllDf = data.frame()
 wgsSnvAllDf = rbind(wgsSnvAllDf, data.frame(icgcWgsSnvAllDf[, c("source", "cancer", "project_code", "submitted_sample_id",
                                                                 "chromosome", "chromosome_start", 
@@ -194,7 +196,7 @@ for (chr in chrs) {
 ##
 ## Merge hotspot candidates and calculate FDRs
 ##
-hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.hotspot%d.txt", distCut))))
+hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer.wgs.*.hotspot%d.txt", distCut))))
 hotspotDf = data.frame()
 for (hotspotChrFile in hotspotChrFiles) {
     cat(sprintf("Merging %s ...\n", hotspotChrFile))
@@ -206,20 +208,21 @@ hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr"
 hotspotDf$all_adj_mcnt_p_value = p.adjust(hotspotDf$mcnt_p_value, method = "fdr")
 hotspotDf = hotspotDf[order(hotspotDf$all_adj_mcnt_p_value),]
 head(hotspotDf)
+nrow(hotspotDf)
 
 
 ##
-## Filter based on FDR (< 0.05) and generate chromosome-level hotspot files and VEP inputs files
+## Filter based on FDR (< 0.01) and generate chromosome-level hotspot files and VEP inputs files
 ##
-hotspotSigDf = subset(hotspotDf, all_adj_mcnt_p_value < 0.05)
+hotspotSigDf = subset(hotspotDf, all_adj_mcnt_p_value < 0.01 & all_adj_scnt_p_value < 0.01)
 nrow(hotspotSigDf)
 
 for (chr in chrs) {
     chr = as.character(chr)
     print(chr)
     hotspotSigChrDf = subset(hotspotSigDf, space == chr)
-    hotspotSigChrFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.hotspot%d.fdr0.05.txt", chr, distCut))
-    hotspotSigChrVepFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.chr%s.hotspot%d.fdr0.05.vep_in.txt", chr, distCut))
+    hotspotSigChrFile = file.path(hotspotDir, sprintf("cancer.wgs.somatic.chr%s.hotspot%d.fdr0.01.txt", chr, distCut))
+    hotspotSigChrVepFile = file.path(hotspotDir, sprintf("cancer.wgs.somatic.chr%s.hotspot%d.fdr0.01.vep_in.txt", chr, distCut))
     write.table(hotspotSigChrDf, hotspotSigChrFile, row.names = F, col.names = T, sep = "\t", quote = F)
     write.table(hotspotSigChrDf[, c("space", "start", "end", "allele", "strand")], hotspotSigChrVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
 }
@@ -328,7 +331,7 @@ for (loopFile in loopFiles) {
 ##
 ## Read VEP output and filter out suspicious hotspots overlapping segmental duplications and simple repeats
 ##
-hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.chr*.hotspot%d.fdr0.05.vep_out.txt.expanded", distCut))))
+hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer*.chr*.hotspot%d.fdr0.01.vep_out.txt.expanded", distCut))))
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
     hotspotSigVepOutChrDf = read.delim(hotspotSigVepOutChrFile, header = T, as.is = T)
@@ -350,7 +353,7 @@ rm(hotspotSigVepOutMergedDf)
 ##
 ## Postprocess VEP annotated hotspots
 ##
-hotspotSigAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotSigAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer*chr*.hotspot%d.fdr0.01.annotated.txt", distCut))))
 hotspotSigAnnotDf = data.frame()
 for (hotspotSigAnnotChrFile in hotspotSigAnnotChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigAnnotChrFile))
@@ -454,7 +457,7 @@ save(cnvByGeneDf, file = cnvByGeneRdata)
 
 
 ## Split hotspot files into pieces for association tests
-hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotAnnotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("*chr*.hotspot%d.fdr0.01.annotated.txt", distCut))))
 for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     cat(sprintf("Splitting %s ...\n", hotspotAnnotChrFile))
     hotspotAnnotChrDf = read.delim(hotspotAnnotChrFile, header = T, as.is = T)
@@ -474,7 +477,7 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
 
 
 ## Collect association results
-hotspotAssFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("chrs/*/*chr*.hotspot%d.fdr0.05.annotated.*.ass.txt", distCut))))
+hotspotAssFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("chrs/*/*chr*.hotspot%d.fdr0.01.annotated.*.ass.txt", distCut))))
 hotspotAssDt <- foreach(hotspotAssFile=hotspotAssFiles, .combine=function(...) rbindlist(list(...)), .multicombine=TRUE) %dopar% {
     cat(sprintf("Reading %s ...\n", hotspotAssFile))
     if (file.info(hotspotAssFile)$size > 1) {
@@ -483,7 +486,7 @@ hotspotAssDt <- foreach(hotspotAssFile=hotspotAssFiles, .combine=function(...) r
 }
 
 hotspotAssDf = as.data.frame(hotspotAssDt)
-hotspotSigAssDf = subset(hotspotAssDf, log2FoldExpressionWilcoxPvalue < 0.05)
+hotspotSigAssDf = subset(hotspotAssDf, log2FoldExpressionWilcoxPvalue < 0.01)
 nrow(hotspotSigAssDf)
 head(hotspotSigAssDf)
 
@@ -496,57 +499,94 @@ names(roadmapChromBorderColors) = roadmapChromStates
 roadmapChromStateLabels = c("Active TSS", "Flanking Active TSS", "Transcr. at gene 5' and 3'", "Strong transcription", "Weak transcription", "Genic enhancers", "Enhancers", "ZNF genes & repeats", "Heterochromatin", "Bivalent/Poised TSS", "Flanking Bivalent TSS/Enh", "Bivalent Enhancer", "Repressed PolyComb", "Weak Repressed PolyComb", "Quiescent/Low", "Unknown")
 names(roadmapChromStateLabels) = roadmapChromStates
 
-hotspotSigAssAnnotDf = data.frame()
-for (loc in unique(hotspotSigAnnotDf$Location)) {
-    hotspotIndAnnotDf = subset(hotspotSigAnnotDf, Location == loc)
-    olGenes = subset(hotspotIndAnnotDf, Feature_type == "Transcript")$SYMBOL
-    cisGenes = subset(hotspotSigAssDf, Location == loc & supportedBy != "GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC")$Gene
-    transGenes = subset(hotspotSigAssDf, Location == loc & supportedBy == "GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC")$Gene
-    allStates = mixedsort(unique(unlist(sapply(hotspotIndAnnotDf[1, grep("coreMarks", colnames(hotspotIndAnnotDf))], function(x) strsplit(x, ",")[[1]]))))
-    hotspotColor = roadmapChromFillColors[allStates[1]]
-    hotspotState = paste(allStates, collapse = ",")
+#hotspotSigAssAnnotDf = data.frame()
+locs = unique(hotspotSigAnnotDf$Location)
+locChunks = chunk(1:length(locs), 10)
+#for (loc in unique(hotspotSigAnnotDf$Location)) {
+#for (i in 1:length(locs)) {
+hotspotSigAssAnnotDf <- foreach(j=1:length(locChunks), .combine = rbind) %dopar% {
+    cat(sprintf("Processing chunk %d out of %d ...\n", j, length(locChunks)))
+    hotspotSigAssAnnotChunkDf = data.frame()
+    for (i in locChunks[[j]]) {
+        loc = locs[i]
+        hotspotIndAnnotDf = subset(hotspotSigAnnotDf, Location == loc)
+        olGenes = subset(hotspotIndAnnotDf, Feature_type == "Transcript")$SYMBOL
+        cisGenes = subset(hotspotSigAssDf, Location == loc & supportedBy != "GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC")$Gene
+        transGenes = subset(hotspotSigAssDf, Location == loc & supportedBy == "GSE63525_GM12878_100kb_inter_MAPQGE30_SQRTVC")$Gene
+        allStates = mixedsort(unique(unlist(sapply(hotspotIndAnnotDf[1, grep("coreMarks", colnames(hotspotIndAnnotDf))], function(x) strsplit(x, ",")[[1]]))))
+        hotspotColor = roadmapChromFillColors[allStates[1]]
+        hotspotState = paste(allStates, collapse = ",")
 
-    hotspotSigAnnotSubDf = subset(hotspotSigAnnotDf, Location == loc)
-    splice_site_cnt = sum(grepl("splice", hotspotSigAnnotSubDf$Consequence))
-    exon_cnt = sum(grepl("frame", hotspotSigAnnotSubDf$Consequence) | hotspotSigAnnotSubDf$EXON != "")
-    five_prime_utr_cnt = sum(grepl("5_prime", hotspotSigAnnotSubDf$Consequence))
-    three_prime_utr_cnt = sum(grepl("3_prime", hotspotSigAnnotSubDf$Consequence))
-    intron_cnt = sum(grepl("intron", hotspotSigAnnotSubDf$Consequence))
-    tot_region_cnt = splice_site_cnt + exon_cnt + five_prime_utr_cnt + three_prime_utr_cnt + intron_cnt
+        hotspotSigAnnotSubDf = subset(hotspotSigAnnotDf, Location == loc)
+        splice_site_cnt = sum(grepl("splice", hotspotSigAnnotSubDf$Consequence))
+        exon_cnt = sum(grepl("frame", hotspotSigAnnotSubDf$Consequence) | hotspotSigAnnotSubDf$EXON != "")
+        five_prime_utr_cnt = sum(grepl("5_prime", hotspotSigAnnotSubDf$Consequence))
+        three_prime_utr_cnt = sum(grepl("3_prime", hotspotSigAnnotSubDf$Consequence))
+        intron_cnt = sum(grepl("intron", hotspotSigAnnotSubDf$Consequence))
+        tot_region_cnt = splice_site_cnt + exon_cnt + five_prime_utr_cnt + three_prime_utr_cnt + intron_cnt
 
-    genomic_types = c()
-    if (exon_cnt > 0) genomic_types = c(genomic_types, "exon")
-    if (five_prime_utr_cnt > 0) genomic_types = c(genomic_types, "five_prime_utr")
-    if (three_prime_utr_cnt > 0) genomic_types = c(genomic_types, "three_prime_utr")
-    if (splice_site_cnt > 0) genomic_types = c(genomic_types, "splice_site") 
-    if (intron_cnt > 0) genomic_types = c(genomic_types, "intron")
-    if (tot_region_cnt == 0) genomic_types = c(genomic_types, "igr")
-    genomic_type = paste(genomic_types, collapse = ",")
+        genomic_types = c()
+        if (exon_cnt > 0) genomic_types = c(genomic_types, "exon")
+        if (five_prime_utr_cnt > 0) genomic_types = c(genomic_types, "five_prime_utr")
+        if (three_prime_utr_cnt > 0) genomic_types = c(genomic_types, "three_prime_utr")
+        if (splice_site_cnt > 0) genomic_types = c(genomic_types, "splice_site") 
+        if (intron_cnt > 0) genomic_types = c(genomic_types, "intron")
+        if (tot_region_cnt == 0) genomic_types = c(genomic_types, "igr")
+        genomic_type = paste(genomic_types, collapse = ",")
 
-    hotspotSigAssAnnotDf = with(hotspotIndAnnotDf[1,], 
-                             rbind(hotspotSigAssAnnotDf,
-                                   data.frame(Location = loc,
-                                              space = space,
-                                              start = start,
-                                              end = end,
-                                              mcnt = mcnt,
-                                              scnt = scnt,
-                                              sids = sids,
-                                              all_adj_mcnt_p_value = all_adj_mcnt_p_value,
-                                              all_adj_scnt_p_value = all_adj_scnt_p_value,
-                                              types = genomic_type,
-                                              overlapping_genes = paste(olGenes, collapse = ","),
-                                              cis_genes = paste(cisGenes, collapse = ","),
-                                              trans_genes = paste(transGenes, collapse = ","),
-                                              states = hotspotState,
-                                              rep_state = allStates[1],
-                                              color = hotspotColor,
-                                              stringsAsFactors = FALSE)))
+        hotspotSigAssAnnotChunkDf = with(hotspotIndAnnotDf[1,], 
+                                         rbind(hotspotSigAssAnnotChunkDf,
+                                               data.frame(Location = loc,
+                                                          space = space,
+                                                          start = start,
+                                                          end = end,
+                                                          mcnt = mcnt,
+                                                          scnt = scnt,
+                                                          sids = sids,
+                                                          all_adj_mcnt_p_value = all_adj_mcnt_p_value,
+                                                          all_adj_scnt_p_value = all_adj_scnt_p_value,
+                                                          types = genomic_type,
+                                                          overlapping_genes = paste(olGenes, collapse = ","),
+                                                          cis_genes = paste(cisGenes, collapse = ","),
+                                                          trans_genes = paste(transGenes, collapse = ","),
+                                                          states = hotspotState,
+                                                          rep_state = allStates[1],
+                                                          color = hotspotColor,
+                                                          stringsAsFactors = FALSE)))
+
+        #hotspotSigAssAnnotDf = with(hotspotIndAnnotDf[1,], 
+                                #rbind(hotspotSigAssAnnotDf,
+                                    #data.frame(Location = loc,
+                                                #space = space,
+                                                #start = start,
+                                                #end = end,
+                                                #mcnt = mcnt,
+                                                #scnt = scnt,
+                                                #sids = sids,
+                                                #all_adj_mcnt_p_value = all_adj_mcnt_p_value,
+                                                #all_adj_scnt_p_value = all_adj_scnt_p_value,
+                                                #types = genomic_type,
+                                                #overlapping_genes = paste(olGenes, collapse = ","),
+                                                #cis_genes = paste(cisGenes, collapse = ","),
+                                                #trans_genes = paste(transGenes, collapse = ","),
+                                                #states = hotspotState,
+                                                #rep_state = allStates[1],
+                                                #color = hotspotColor,
+                                                #stringsAsFactors = FALSE)))
+    }
+    hotspotSigAssAnnotChunkDf
 }
 
 #nrow(hotspotSigAssAnnotDf)
 #head(hotspotSigAssAnnotDf)
 #tail(hotspotSigAssAnnotDf)
+
+min(hotspotSigAssAnnotDf$all_adj_mcnt_p_value_d)
+min(hotspotSigAssAnnotDf$all_adj_scnt_p_value_d)
+
+delta = .Machine$double.xmin
+hotspotSigAssAnnotDf$all_adj_mcnt_p_value_d = hotspotSigAssAnnotDf$all_adj_mcnt_p_value + delta
+hotspotSigAssAnnotDf$all_adj_scnt_p_value_d = hotspotSigAssAnnotDf$all_adj_scnt_p_value + delta
 
 ##
 ## Plot linear genome-wide distribution of hotspots
@@ -554,9 +594,9 @@ for (loc in unique(hotspotSigAnnotDf$Location)) {
 for (chr in chrs) {
     cat(sprintf("Generating a plot for the linear distribution of hotspots in chr%s ...\n", chr))
     hotspotSigAssAnnotChrDf = subset(hotspotSigAssAnnotDf, space == chr)
-    hotspotSigAssAnnotChrDf$log10Qvalue = -log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value)
+    hotspotSigAssAnnotChrDf$log10Qvalue = -log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d)
     for (i in 1:nrow(hotspotSigAssAnnotChrDf)) {
-        if (hotspotSigAssAnnotChrDf[i, "log10Qvalue"] > 4) {
+        if (hotspotSigAssAnnotChrDf[i, "log10Qvalue"] > 7) {
             olGeneNames = strsplit(hotspotSigAssAnnotChrDf[i, "overlapping_genes"], ",")[[1]]
             cisGeneNames = strsplit(hotspotSigAssAnnotChrDf[i, "cis_genes"], ",")[[1]]
             transGeneNames = strsplit(hotspotSigAssAnnotChrDf[i, "trans_genes"], ",")[[1]]
@@ -569,16 +609,6 @@ for (chr in chrs) {
                                                     paste(allGeneNames, collapse = ",")) 
             } else {
                 hotspotSigAssAnnotChrDf[i, "label"] = hotspotSigAssAnnotChrDf[i, "Location"]
-                #transGeneCnt = length(transGeneNames)
-                #if (transGeneCnt > 1) {
-                    #hotspotSigAssAnnotChrDf[i, "label"] = ifelse(transGeneCnt > 7, 
-                                                            #paste(paste(transGeneNames[1:ceiling(transGeneCnt/2)], collapse = ","),
-                                                                    #paste(transGeneNames[(ceiling(transGeneCnt/2)+1):transGeneCnt], collapse = ","), sep = "\n"),
-                                                        #paste(transGeneNames, collapse = ",")) 
-                    #hotspotSigAssAnnotChrDf[i, "label"] = hotspotSigAssAnnotChrDf[i, "loc"]
-                #} else {
-                    #hotspotSigAssAnnotChrDf[i, "label"] = hotspotSigAssAnnotChrDf[i, "loc"]
-                #}
             }
         } else {
             hotspotSigAssAnnotChrDf[i, "label"] = NA
@@ -587,13 +617,13 @@ for (chr in chrs) {
     maxGeneCnt = max(sapply(hotspotSigAssAnnotChrDf$label, function(x) length(strsplit(x, ",")[[1]])))
     baseFontSize = 15
     breakSize = 10^7 * 2
-    yBy = ceiling(max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value)) / 5)
+    yBy = ceiling(max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d)) / 5)
     yByScale = maxGeneCnt 
-    p = ggplot(hotspotSigAssAnnotChrDf, aes(x = start, y = -log10(all_adj_mcnt_p_value))) + 
-        geom_hline(yintercept = seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value) + yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
+    p = ggplot(hotspotSigAssAnnotChrDf, aes(x = start, y = -log10(all_adj_mcnt_p_value_d))) + 
+        geom_hline(yintercept = seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
         geom_point(colour = "red", size = 2) + 
-        geom_text(aes(x = start, y = -log10(all_adj_mcnt_p_value), label = hotspotSigAssAnnotChrDf$label, 
-                      colour = factor(hotspotSigAssAnnotChrDf$rep_state), angle = 45, hjust = -0.05, vjust = -0.05, size = 9)) +
+        geom_text(aes(x = start, y = -log10(all_adj_mcnt_p_value_d), label = hotspotSigAssAnnotChrDf$label, 
+                      colour = factor(hotspotSigAssAnnotChrDf$rep_state), angle = 45, hjust = -0.01, vjust = -0.01, size = 9)) +
         theme(axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
               axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
               axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", hjust=1),
@@ -610,10 +640,10 @@ for (chr in chrs) {
                            limits=c(1, max(hotspotSigAssAnnotChrDf$end) + breakSize),
                            labels=as.integer(seq(0, max(hotspotSigAssAnnotChrDf$end), by=breakSize)/10^6)) +
         scale_y_continuous(name = "Significance of hotspot mutation (-log10(q)) \n",
-                           breaks=seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value) + yBy), by=yBy),
-                           limits=c(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value) + yByScale * yBy))) +
+                           breaks=seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yBy), by=yBy),
+                           limits=c(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yByScale * yBy))) +
         scale_colour_manual(values = roadmapChromFillColors)
-    hotspotAnnotChrGrpFile = file.path(baseDir, "figure", sprintf("Linear_distribution_of_hotspot100_fdr0.05.chr%s.pdf", chr))
+    hotspotAnnotChrGrpFile = file.path(baseDir, "figure", sprintf("Linear_distribution_of_hotspot100_fdr0.01.chr%s.pdf", chr))
     ggsave(filename = hotspotAnnotChrGrpFile, plot = p, width = 17, height = 6)
 }
 
@@ -623,10 +653,10 @@ for (chr in chrs) {
 ##
 col2rgbLabel = function(cl) apply(col2rgb(sapply(cl, function(x)x[1])), 2, function(n) paste(n, collapse = ","))
 circosLogPDf = hotspotSigAssAnnotDf
-circosLogPDf$log10Qvalue = log10(circosLogPDf$all_adj_mcnt_p_value)
+circosLogPDf$log10Qvalue = log10(circosLogPDf$all_adj_mcnt_p_value_d)
 circosLogPDf$space = paste("hs", circosLogPDf$space, sep = "")
 for (i in 1:nrow(circosLogPDf)) {
-    if (circosLogPDf[i, "log10Qvalue"] < -4) {
+    if (circosLogPDf[i, "log10Qvalue"] < -7) {
         olGeneNames = strsplit(circosLogPDf[i, "overlapping_genes"], ",")[[1]]
         cisGeneNames = strsplit(circosLogPDf[i, "cis_genes"], ",")[[1]]
         allGeneNames = unique(c(olGeneNames, cisGeneNames))
@@ -644,7 +674,7 @@ for (i in 1:nrow(circosLogPDf)) {
 circosLogPFile = file.path(circosDir, "hotspot.logq")
 write.table(circosLogPDf[, c("space", "start", "end", "log10Qvalue")], circosLogPFile, row.names = F, col.names = F, sep = "\t", quote = F)
 circosLabelFile = file.path(circosDir, "hotspot.label")
-write.table(subset(circosLogPDf, log10Qvalue < -4)[, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
+write.table(subset(circosLogPDf, log10Qvalue < -7)[, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
 
 
 ##
@@ -723,10 +753,10 @@ for (chr in chrs) {
         segStates = segStates[segStates != ""]
         if (length(segStates) == 0) segStates = NA
         hotspotEpigenomicDistDf = rbind(hotspotEpigenomicDistDf,
-                                            data.frame(Location = hotspot$Location,
-                                                       all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value,
-                                                       state = segStates,
-                                                       stringsAsFactors = FALSE))
+                                        data.frame(Location = hotspot$Location,
+                                                   all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d,
+                                                   state = segStates,
+                                                   stringsAsFactors = FALSE))
         hotspotSigAnnotSubDf = subset(hotspotSigAnnotDf, Location == hotspot$Location)
         splice_site_cnt = sum(grepl("splice", hotspot$types))
         exon_cnt = sum(grepl("exon", hotspot$types))
@@ -734,12 +764,30 @@ for (chr in chrs) {
         three_prime_utr_cnt = sum(grepl("three", hotspot$types))
         intron_cnt = sum(grepl("intron", hotspot$types))
         tot_region_cnt = splice_site_cnt + exon_cnt + five_prime_utr_cnt + three_prime_utr_cnt + intron_cnt
-        if (splice_site_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "splice_site"))
-        if (exon_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "exon"))
-        if (five_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "five_prime_utr"))
-        if (three_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "three_prime_utr"))
-        if (intron_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "intron"))
-        if (tot_region_cnt == 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, data.frame(Location = hotspot$Location, all_adj_mcnt_p_value = hotspot$all_adj_mcnt_p_value, region = "igr"))
+        if (splice_site_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf,
+                                                              data.frame(Location = hotspot$Location,
+                                                                         all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d,
+                                                                         region = "splice_site"))
+        if (exon_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, 
+                                                       data.frame(Location = hotspot$Location, 
+                                                                  all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d,
+                                                                  region = "exon"))
+        if (five_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, 
+                                                                 data.frame(Location = hotspot$Location, 
+                                                                            all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d, 
+                                                                            region = "five_prime_utr"))
+        if (three_prime_utr_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, 
+                                                                  data.frame(Location = hotspot$Location, 
+                                                                             all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d, 
+                                                                             region = "three_prime_utr"))
+        if (intron_cnt > 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, 
+                                                         data.frame(Location = hotspot$Location, 
+                                                                    all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d, 
+                                                                    region = "intron"))
+        if (tot_region_cnt == 0) hotspotGenomicDistDf = rbind(hotspotGenomicDistDf, 
+                                                              data.frame(Location = hotspot$Location, 
+                                                                         all_adj_mcnt_p_value_d = hotspot$all_adj_mcnt_p_value_d, 
+                                                                         region = "igr"))
     }
 }
 
@@ -775,7 +823,7 @@ p = ggplot(data = hotspotGenomicDistGrpDf, aes(x=factor(region, levels = hotspot
                                                          "three_prime_utr" = "3' UTR", "exon" = "Exon")) +
     #scale_x_discrete(name="\nGenomic region") +
     scale_y_continuous("Percentage\n", label = percent)
-hotspotGenomicDistGrpFile = file.path(baseDir, "figure", "Genomic_distribution_of_hotspot100_fdr0.05.pdf")
+hotspotGenomicDistGrpFile = file.path(baseDir, "figure", "Genomic_distribution_of_hotspot100_fdr0.01.pdf")
 ggsave(filename = hotspotGenomicDistGrpFile, plot = p, width = 8, height = 8, unit = "cm")
 
 baseFontSize = 11
@@ -797,7 +845,7 @@ p = ggplot(data = hotspotEpigenomicDistGrpDf, aes(x=factor(state, levels = hotsp
     scale_y_continuous("Percentage\n", label = percent) +
     scale_color_manual("", values = roadmapChromBorderColors) +
     scale_fill_manual("", values = roadmapChromFillColors)
-hotspotEpigenomicDistGrpFile = file.path(baseDir, "figure", "Epigenomic_distribution_of_hotspot100_fdr0.05.pdf")
+hotspotEpigenomicDistGrpFile = file.path(baseDir, "figure", "Epigenomic_distribution_of_hotspot100_fdr0.01.pdf")
 ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 12, unit = "cm")
 
 
@@ -874,7 +922,7 @@ write.table(sampleIdToCancerDf[, c("sid", "type", "color", "cancer")], sampleIdT
 
 
 ## Read annotated hotspot files
-hotspotChrAnnotFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("Combined*.chr*.hotspot%d.fdr0.05.annotated.txt", distCut))))
+hotspotChrAnnotFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer*.chr*.hotspot%d.fdr0.01.annotated.txt", distCut))))
 hotspotAnnotSigDf = data.frame()
 hotspotAnnotSigGrpDf = data.frame()
 for (hotspotChrAnnotFile in hotspotChrAnnotFiles) {
@@ -908,7 +956,7 @@ sampleHotspotMutProfileDist = vegdist(sampleHotspotMutProfileDf, method = "jacca
 #sampleHotspotMutProfileNjTree = nj(as.dist(sampleHotspotMutProfileDist))
 #sampleHotspotMutProfileNjTree = nj(sampleHotspotMutProfileDist)
 sampleHotspotMutProfileNjTree = hclust(sampleHotspotMutProfileDist, method = "single")
-sampleHotspotMutProfileNjTreeFile = file.path(baseDir, "table", "NJ_tree-hotspot100-fdr0.05.jaccard.single.newick.txt")
+sampleHotspotMutProfileNjTreeFile = file.path(baseDir, "table", "NJ_tree-hotspot100-fdr0.01.jaccard.single.newick.txt")
 write.tree(as.phylo(sampleHotspotMutProfileNjTree), file=sampleHotspotMutProfileNjTreeFile)
 
 
@@ -957,7 +1005,7 @@ hotspotAnnotSigDf$TCGA_PanCan_SMG = ifelse(hotspotAnnotSigDf$SYMBOL %in% tcgaSmg
 ##
 ## Save hotspot list
 ##
-hotspotAnnotFile = file.path(hotspotDir, sprintf("Combined.wgs.somatic.hotspot%d.fdr0.01.annotated.txt", distCut))
+hotspotAnnotFile = file.path(hotspotDir, sprintf("cancer.wgs.somatic.hotspot%d.fdr0.01.annotated.txt", distCut))
 write.table(hotspotAnnotSigDf[hotspotAnnotSigDf$all_adj_scnt_p_value < 0.000001,], hotspotAnnotFile, row.names = F, col.names = T, sep = "\t", quote = F)
 
 
