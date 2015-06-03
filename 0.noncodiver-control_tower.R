@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(10)
+registerDoMC(5)
 
 require(ape)
 require(vegan)
@@ -48,6 +48,7 @@ gdacDir = file.path(baseDir, "gdac")
 gdacStdDataDir = file.path(gdacDir, "stddata__2015_02_04")
 gdacAnlDataDir = file.path(gdacDir, "analyses__2014_10_17")
 figDir = file.path(baseDir, "figure")
+tableDir = file.path(baseDir, "table")
 circosDir = file.path(baseDir, "circos")
 
 chrs = c(1:22, "X")
@@ -415,9 +416,9 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     hotspotSigAnnotDf = rbind(hotspotSigAnnotDf, hotspotAnnotChrDf)
     hotspotAnnotChrDf$allele = NULL
     hotspotAnnotChrDf$strand = NULL
-    hotspotAnnotChrGrpDf = sqldf('SELECT Location, all_adj_mcnt_p_value, all_adj_scnt_p_value, sids
+    hotspotAnnotChrGrpDf = sqldf(sprintf("SELECT Location, all_adj_mcnt_p_value, all_adj_scnt_p_value, sids, %s
                                  FROM hotspotAnnotChrDf 
-                                 GROUP BY Location ORDER BY all_adj_mcnt_p_value ASC')
+                                 GROUP BY Location ORDER BY all_adj_mcnt_p_value ASC", paste(grep("coreMarks", colnames(hotspotAnnotChrDf), value = T), collapse = ",")))
     hotspotSigAnnotGrpDf = rbind(hotspotSigAnnotGrpDf, hotspotAnnotChrGrpDf)
 }
 
@@ -725,6 +726,8 @@ with(hotspotSigAssAnnotDf, plot(-log2(all_adj_mcnt_p_value_d), -log2(all_adj_scn
 ## Check enrichment of hotspots in genomic and epigenomic features
 ##
 source("http://www.pmc.ucsc.edu/~mclapham/Rtips/G%20test.txt")
+
+# Genomic features
 refGeneDf$space = gsub("chr", "", refGeneDf$chrom)
 refGeneDf = refGeneDf[refGeneDf$space %in% chrs,]
 refGeneDf$space = factor(refGeneDf$space, levels = chrs)
@@ -774,9 +777,9 @@ refGeneExonDf = subset(refGeneExonSpliceDf, type == "exon")
 refGeneExonGr = unique(sort(with(refGeneExonDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = "*"))))
 refGeneSpliceDf = subset(refGeneExonSpliceDf, type == "splice")
 refGeneSpliceGr = unique(sort(with(refGeneSpliceDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = "*"))))
-refGeneTrsGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = txStart, end = txEnd), strand = "*"))))
-refGeneIgrGr = setdiff(hg19Gr, refGeneTrsGr)
-refGeneIntronGr = setdiff(refGeneTrsGr, refGeneExonGr)
+refGeneGenicGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = txStart, end = txEnd), strand = "*"))))
+refGeneIgrGr = setdiff(hg19Gr, refGeneGenicGr)
+refGeneIntronGr = setdiff(refGeneGenicGr, refGeneExonGr)
 
 hotspotAbbDf = hotspotSigAssAnnotDf[, c("space", "start", "end", "mcnt", "scnt", "all_adj_mcnt_p_value", "all_adj_scnt_p_value")]
 hotspotAbbDf = hotspotAbbDf[hotspotAbbDf$space %in% chrs,]
@@ -790,6 +793,13 @@ hotspotAbb5UtrIntMat = matrix(c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("5'UTR", "Non-5'UTR")))
 hotspotAbb5UtrIntG = g.test(hotspotAbb5UtrIntMat)
 
+hotspotAbb5UtrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("5' UTR", "5' UTR"),
+                                 count = c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
+                                           sum(as.numeric(width(refGene5utrGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbb5UtrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGene5utrGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
 hotspotAbb3UtrIntGr = intersect(hotspotAbbGr, refGene3utrGr)
 hotspotAbb3UtrIntMat = matrix(c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                 sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr))),
@@ -797,6 +807,13 @@ hotspotAbb3UtrIntMat = matrix(c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGene3utrGr))) + sum(as.numeric(width(hotspotAbb3UtrIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("3'UTR", "Non-3'UTR")))
 hotspotAbb3UtrIntG = g.test(hotspotAbb3UtrIntMat)
+
+hotspotAbb3UtrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("3' UTR", "3' UTR"),
+                                 count = c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
+                                           sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbb3UtrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
 hotspotAbbExonIntGr = intersect(hotspotAbbGr, refGeneExonGr)
 hotspotAbbExonIntMat = matrix(c(sum(as.numeric(width(hotspotAbbExonIntGr))),
@@ -806,6 +823,13 @@ hotspotAbbExonIntMat = matrix(c(sum(as.numeric(width(hotspotAbbExonIntGr))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Exon", "Non-exon")))
 hotspotAbbExonIntG = g.test(hotspotAbbExonIntMat)
 
+hotspotAbbExonIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Exon", "Exon"),
+                                 count = c(sum(as.numeric(width(hotspotAbbExonIntGr))),
+                                           sum(as.numeric(width(refGeneExonGr))) - sum(as.numeric(width(hotspotAbbExonIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbExonIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneExonGr))) - sum(as.numeric(width(hotspotAbbExonIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
 hotspotAbbSpliceIntGr = intersect(hotspotAbbGr, refGeneSpliceGr)
 hotspotAbbSpliceIntMat = matrix(c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                                 sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr))),
@@ -814,13 +838,28 @@ hotspotAbbSpliceIntMat = matrix(c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Splice", "Non-slice")))
 hotspotAbbSpliceIntG = g.test(hotspotAbbSpliceIntMat)
 
-hotspotAbbTrsIntGr = intersect(hotspotAbbGr, refGeneTrsGr)
-hotspotAbbTrsIntMat = matrix(c(sum(as.numeric(width(hotspotAbbTrsIntGr))),
-                                sum(as.numeric(width(refGeneTrsGr))) - sum(as.numeric(width(hotspotAbbTrsIntGr))),
-                                sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbTrsIntGr))),
-                                sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneTrsGr))) + sum(as.numeric(width(hotspotAbbTrsIntGr)))),
+hotspotAbbSpliceIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Splice", "Splice"),
+                                 count = c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
+                                           sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbSpliceIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
+hotspotAbbGenicIntGr = intersect(hotspotAbbGr, refGeneGenicGr)
+hotspotAbbGenicIntMat = matrix(c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneGenicGr))) + sum(as.numeric(width(hotspotAbbGenicIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Transcript", "Non-transcript")))
-hotspotAbbTrsIntG = g.test(hotspotAbbTrsIntMat)
+hotspotAbbGenicIntG = g.test(hotspotAbbGenicIntMat)
+
+hotspotAbbGenicIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Genic", "Genic"),
+                                 count = c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                           sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbGenicIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
 
 hotspotAbbIgrIntGr = intersect(hotspotAbbGr, refGeneIgrGr)
 hotspotAbbIgrIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
@@ -830,6 +869,13 @@ hotspotAbbIgrIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Intergenic", "Non-integenic")))
 hotspotAbbIgrIntG = g.test(hotspotAbbIgrIntMat)
 
+hotspotAbbIgrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Intergenic", "Intergenic"),
+                                 count = c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
+                                           sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbIgrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
 hotspotAbbIntronIntGr = intersect(hotspotAbbGr, refGeneIntronGr)
 hotspotAbbIntronIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                 sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr))),
@@ -837,6 +883,97 @@ hotspotAbbIntronIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneIntronGr))) + sum(as.numeric(width(hotspotAbbIntronIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Intronic", "Non-intronic")))
 hotspotAbbIntronIntG = g.test(hotspotAbbIntronIntMat)
+
+hotspotAbbIntronIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Intron", "Intron"),
+                                 count = c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
+                                           sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbIntronIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
+
+hotspotAbbIntDf = rbind(hotspotAbb3UtrIntDf, hotspotAbb5UtrIntDf, hotspotAbbExonIntDf, hotspotAbbGenicIntDf, hotspotAbbIgrIntDf, hotspotAbbIntronIntDf)
+
+p = ggplot(data = hotspotAbbIntDf, aes(x=hotspot, y=fraction)) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90), axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="") +
+    scale_y_continuous("Percentage\n", label = percent) +
+    facet_wrap(~ feature, scales = "free_y")
+
+hotspotAbbIntFile = file.path(baseDir, "figure", "Genomic_enrichment_of_hotspot100_fdr0.01.pdf")
+ggsave(filename = hotspotAbbIntFile, plot = p, width = 12, height = 12, unit = "cm")
+
+
+# Epigenomic features
+chromHmmFiles = Sys.glob(file.path(baseDir, "roadmap/chromhmm/*_coreMarks_mnemonics.bed.gz"))
+chromHmmAllDf = data.frame()
+for (chromHmmFile in chromHmmFiles) {
+    cat(sprintf("Reading %s ...\n", chromHmmFile))
+    tissueType = strsplit(basename(chromHmmFile), "_", fixed = T)[[1]][1]
+    chromHmmDf = read.delim(gzfile(chromHmmFile), header = F, as.is = T)
+    colnames(chromHmmDf) = c("space", "start", "end", "state")
+    chromHmmDf$type = tissueType
+    chromHmmAllDf = rbind(chromHmmAllDf, chromHmmDf)
+}
+
+chromHmmAllDf$space = gsub("chr", "", chromHmmAllDf$space)
+chromHmmAllDf = chromHmmAllDf[chromHmmAllDf$space %in% chrs,]
+chromHmmAllDf$space = factor(chromHmmAllDf$space, levels = chrs)
+
+hotspotAbbStateIntAllDf = data.frame()
+for (s in mixedsort(unique(chromHmmAllDf$state))) {
+    print(s)
+    chromHmmStateAllDf = subset(chromHmmAllDf, state == s)
+    chromHmmStateAllGr = reduce(as(as(chromHmmStateAllDf, "RangedData"), "GRanges"))
+    hotspotAbbStateIntGr = intersect(hotspotAbbGr, chromHmmStateAllGr)
+    hotspotAbbStateIntMat = matrix(c(sum(as.numeric(width(hotspotAbbStateIntGr))),
+                                    sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr))),
+                                    sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbStateIntGr))),
+                                    sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(chromHmmStateAllGr))) + sum(as.numeric(width(hotspotAbbStateIntGr)))),
+                                  nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c(s, sprintf("Non-%s", s))))
+    hotspotAbbStateIntG = g.test(hotspotAbbStateIntMat)
+
+    hotspotAbbStateIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                     feature = c(s, s),
+                                     count = c(sum(as.numeric(width(hotspotAbbStateIntGr))),
+                                               sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr)))),
+                                     fraction = c(sum(as.numeric(width(hotspotAbbStateIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                                  (sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
+    hotspotAbbStateIntAllDf = rbind(hotspotAbbStateIntAllDf, hotspotAbbStateIntDf)
+}
+
+p = ggplot(data = hotspotAbbStateIntAllDf, aes(x=hotspot, y=fraction, color = feature, fill = feature)) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="") +
+    scale_y_continuous("Percentage\n", label = percent) +
+    scale_color_manual("", values = roadmapChromBorderColors) +
+    scale_fill_manual("", values = roadmapChromFillColors) +
+    facet_wrap(~ feature, scales = "free_y", ncol = 5)
+
+hotspotAbbStateIntAllFile = file.path(baseDir, "figure", "Epignomic_enrichment_of_hotspot100_fdr0.01.pdf")
+ggsave(filename = hotspotAbbStateIntAllFile, plot = p, width = 18, height = 18, unit = "cm")
 
 
 ##
@@ -950,6 +1087,45 @@ ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 1
 
 
 ##
+## Hotspot distribution across cancer types
+##
+sampleIdsByCancerLst = list()
+for (c in unique(wgsSnvAllGrpBySidDf$cancer)) {
+    print(c)
+    wgsSnvAllGrpBySidCancerDf = subset(wgsSnvAllGrpBySidDf, cancer == c)
+    sampleIdsByCancerLst[[c]] = wgsSnvAllGrpBySidCancerDf$sid
+}
+
+for (i in 1:nrow(hotspotSigAnnotGrpDf)) {
+    print(100 * i/nrow(hotspotSigAnnotGrpDf))
+    sampleIds = strsplit(hotspotSigAnnotGrpDf[i, "sids"], ",")[[1]]
+    for (c in unique(wgsSnvAllGrpBySidDf$cancer)) {
+        hotspotSigAnnotGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
+        hotspotSigAnnotGrpDf[i, sprintf("%s_PCT", c)] = 100 * sum(sampleIds %in% sampleIdsByCancerLst[[c]]) / length(sampleIdsByCancerLst[[c]])
+        hotspotSigAnnotGrpDf[i, sprintf("%s_BIN", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]]) > 0
+    }
+}
+
+hotspotSigAnnotGrpDf = hotspotSigAnnotGrpDf[order(hotspotSigAnnotGrpDf$all_adj_scnt_p_value),]
+hotspotSigAnnotGrpSubDf = subset(hotspotSigAnnotGrpDf, all_adj_mcnt_p_value < 0.001 & all_adj_scnt_p_value < 0.001)
+hotspotSigAnnotGrpSubDf = hotspotSigAnnotGrpSubDf[, -which(colnames(hotspotSigAnnotGrpSubDf) %in% c(grep("_CNT", colnames(hotspotSigAnnotGrpDf), value = T), grep("_BIN", colnames(hotspotSigAnnotGrpDf), value = T)))]
+
+nrow(hotspotSigAnnotGrpSubDf)
+hotspotSigAnnotGrpSubFile = file.path(tableDir, "Distirution_of_hotspots_in_cancer_types.txt")
+write.table(hotspotSigAnnotGrpSubDf, hotspotSigAnnotGrpSubFile, row.names = F, col.names = T, sep = "\t", quote = F)
+
+hotspotSigAnnotGrpPctDf = hotspotSigAnnotGrpDf[, c(grep("_PCT", colnames(hotspotSigAnnotGrpDf)))]
+hotspotSigAnnotGrpMat = log10(as.matrix(head(hotspotSigAnnotGrpDf[, c(grep("_PCT", colnames(hotspotSigAnnotGrpDf)))], 50)))
+hotspotSigAnnotGrpMat = hotspotSigAnnotGrpMat[rev(rownames(hotspotSigAnnotGrpMat)),]
+
+colfunc = colorRampPalette(c("white", "red"))
+image(t(hotspotSigAnnotGrpMat), col = colfunc(100), axes=FALSE, xlab="", ylab="")
+axis(3, at = 1:ncol(hotspotSigAnnotGrpMat), labels=colnames(hotspotSigAnnotGrpMat), tick=T)
+axis(2, at = 1:nrow(hotspotSigAnnotGrpMat), labels=rownames(hotspotSigAnnotGrpMat), tick=T)
+
+
+
+##
 ## Examples of hotspots from each genomic/epigenomic category
 ##
 
@@ -1058,26 +1234,6 @@ sampleHotspotMutProfileDist = vegdist(sampleHotspotMutProfileDf, method = "jacca
 sampleHotspotMutProfileNjTree = hclust(sampleHotspotMutProfileDist, method = "single")
 sampleHotspotMutProfileNjTreeFile = file.path(baseDir, "table", "NJ_tree-hotspot100-fdr0.01.jaccard.single.newick.txt")
 write.tree(as.phylo(sampleHotspotMutProfileNjTree), file=sampleHotspotMutProfileNjTreeFile)
-
-
-##
-## Hotspot distribution across cancer types
-##
-for (i in 1:nrow(hotspotSigAnnotGrpDf)) {
-    sampleIds = strsplit(hotspotSigAnnotGrpDf[i, "sids"], ",")[[1]]
-    for (c in names(sampleIdsByCancerLst)) {
-        hotspotSigAnnotGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
-        hotspotSigAnnotGrpDf[i, sprintf("%s_PCT", c)] = 100 * sum(sampleIds %in% sampleIdsByCancerLst[[c]]) / length(sampleIdsByCancerLst[[c]])
-        hotspotSigAnnotGrpDf[i, sprintf("%s_BIN", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]]) > 0
-    }
-}
-
-hotspotSigAnnotGrpDf = hotspotSigAnnotGrpDf[order(hotspotSigAnnotGrpDf$all_adj_scnt_p_value),]
-hotspotSigAnnotGrpMat = log10(as.matrix(head(hotspotSigAnnotGrpDf[, c(grep("_PCT", colnames(hotspotSigAnnotGrpDf)))], 50)))
-hotspotSigAnnotGrpMat = hotspotSigAnnotGrpMat[rev(rownames(hotspotSigAnnotGrpMat)),]
-
-colfunc = colorRampPalette(c("white", "red"))
-image(t(hotspotSigAnnotGrpMat), col = colfunc(100))
 
 
 ##
