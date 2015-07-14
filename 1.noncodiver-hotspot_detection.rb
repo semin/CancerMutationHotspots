@@ -5,7 +5,7 @@ require 'pathname'
 distCut = 100
 hotspotMargin = 50
 poisMargin = 5000
-numCores = 10
+numCores = 5
 baseDir = Pathname.new "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot"
 rScript = baseDir + "script/1.noncodiver-hotspot_detection.R"
 scntFiles = Pathname.glob(baseDir + "hotspot/cancer*.snv.chr*.txt").sort

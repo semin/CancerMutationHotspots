@@ -97,6 +97,8 @@ for (icgcWgsSnvFile in icgcWgsSnvFiles) {
 icgcWgsSnvAllDf$cancer = gsub("(\\w+)-\\w+", "\\1", icgcWgsSnvAllDf$project_code)
 icgcWgsSnvAllDf$source = "ICGC"
 
+length(unique(icgcWgsSnvAllDf$submitted_sample_id))
+length(unique(icgcWgsSnvAllDf$cancer))
 
 ## Read alt expanded TCGA mutation call sets
 tcgaVcfFiles = Sys.glob(file.path(vcfDir, "cancer/*/*.stage4.vcf.gz"))
@@ -128,6 +130,9 @@ tcgaWgsSnvAllDf$source = "TCGA"
 tcgaWgsSnvAllDf = merge(tcgaWgsSnvAllDf, tcgaSampleIdToCancerDf, by = ("sid"), all.x = T)
 #length(unique(tcgaWgsSnvAllDf$sid))
 
+length(unique(tcgaWgsSnvAllDf$sid))
+length(unique(tcgaWgsSnvAllDf$cancer))
+
 
 ## Read Stratton call sets
 sangCanWgsSnvFiles = Sys.glob(file.path(sangDir, "somatic_mutation_data/*/*.wgs.txt"))
@@ -157,6 +162,9 @@ for (sangCanWgsSnvFile in sangCanWgsSnvFiles) {
 sangAllWgsSnvDf$source = "Sanger"
 #length(unique(sangAllWgsSnvDf$sid))
 
+length(unique(sangAllWgsSnvDf$sid))
+length(unique(sangAllWgsSnvDf$cancer))
+
 
 ## cancer all SNVs into one data.frame
 wgsSnvAllDf = data.frame()
@@ -165,9 +173,11 @@ wgsSnvAllDf = rbind(wgsSnvAllDf, data.frame(icgcWgsSnvAllDf[, c("source", "cance
                                                                 "reference_genome_allele", "mutated_to_allele")]))
 
 colnames(wgsSnvAllDf) = c("source", "cancer", "project", "sid", "space", "pos", "ref", "alt")
+
 wgsSnvAllDf = rbind(wgsSnvAllDf, tcgaWgsSnvAllDf[, colnames(wgsSnvAllDf)])
 wgsSnvAllDf = rbind(wgsSnvAllDf, sangAllWgsSnvDf[, colnames(wgsSnvAllDf)])
 
+nrow(wgsSnvAllDf)
 length(unique(wgsSnvAllDf$sid))
 length(unique(wgsSnvAllDf$cancer))
 
@@ -175,6 +185,9 @@ length(unique(wgsSnvAllDf$cancer))
 ##
 ## Basic statistics for sample distribution and mutation rates
 ##
+wgsSnvAllGrpByLocDf = sqldf('SELECT space, pos, ref, alt, COUNT(DISTINCT sid) AS scnt FROM wgsSnvAllDf GROUP BY space, pos, ref, alt')
+nrow(wgsSnvAllGrpByLocDf)
+
 wgsSnvAllGrpBySidDf = sqldf('SELECT source, cancer, project, sid, COUNT(*) mcnt FROM wgsSnvAllDf GROUP BY sid')
 wgsSnvAllGrpBySidDf$mrate = 1000000 * wgsSnvAllGrpBySidDf$mcnt / 3036303846
 wgsSnvAllGrpBySidDf = with(wgsSnvAllGrpBySidDf, wgsSnvAllGrpBySidDf[order(cancer, mcnt),])
@@ -257,8 +270,14 @@ for (hotspotChrFile in hotspotChrFiles) {
     hotspotDf = rbind(hotspotDf, hotspotChrDf)
 }
 
+subset(hotspotDf, is.na(scnt_p_value))
+
+summary(hotspotDf$scnt_p_value)
+summary(hotspotDf$mcnt_p_value)
+
 hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr")
 hotspotDf$all_adj_mcnt_p_value = p.adjust(hotspotDf$mcnt_p_value, method = "fdr")
+
 hotspotDf = hotspotDf[order(hotspotDf$all_adj_mcnt_p_value),]
 head(hotspotDf)
 nrow(hotspotDf)
@@ -422,8 +441,8 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     hotspotSigAnnotGrpDf = rbind(hotspotSigAnnotGrpDf, hotspotAnnotChrGrpDf)
 }
 
-hotspotSigAnnotDf = with(hotspotSigAnnotDf, hotspotSigAnnotDf[order(all_adj_mcnt_p_value),])
-
+#hotspotSigAnnotDf = with(hotspotSigAnnotDf, hotspotSigAnnotDf[order(all_adj_mcnt_p_value),])
+#nrow(hotspotSigAnnotGrpDf)
 
 
 ##
@@ -552,6 +571,7 @@ hotspotSigAssDf = subset(hotspotAssDf, log2FoldExpressionWilcoxPvalue < 0.01)
 nrow(hotspotSigAssDf)
 head(hotspotSigAssDf)
 
+
 ## Update hotspots with association results
 roadmapChromStates = c("1_TssA", "2_TssAFlnk", "3_TxFlnk", "4_Tx", "5_TxWk", "6_EnhG", "7_Enh", "8_ZNF/Rpts", "9_Het", "10_TssBiv", "11_BivFlnk", "12_EnhBiv", "13_ReprPC", "14_ReprPCWk", "15_Quies", "Unk")
 roadmapChromFillColors = c(rgb(255,0,0,maxColorValue=255), rgb(255,69,0,maxColorValue=255), rgb(50,205,50,maxColorValue=255), rgb(0,128,0,maxColorValue=255), rgb(0,100,0,maxColorValue=255), rgb(194,225,5,maxColorValue=255), rgb(255,255,0,maxColorValue=255), rgb(102,205,170,maxColorValue=255), rgb(138,145,208,maxColorValue=255), rgb(205,92,92,maxColorValue=255), rgb(233,150,122,maxColorValue=255), rgb(189,183,107,maxColorValue=255), rgb(128,128,128,maxColorValue=255), rgb(192,192,192,maxColorValue=255), rgb(255,255,255,maxColorValue=255), rgb(000,000,000,maxColorValue=255))
@@ -616,13 +636,13 @@ hotspotSigAssAnnotDf <- foreach(j=1:length(locChunks), .combine = rbind) %dopar%
     hotspotSigAssAnnotChunkDf
 }
 
-min(hotspotSigAssAnnotDf$all_adj_mcnt_p_value_d)
-min(hotspotSigAssAnnotDf$all_adj_scnt_p_value_d)
-
 delta = .Machine$double.xmin
 hotspotSigAssAnnotDf$all_adj_mcnt_p_value_d = hotspotSigAssAnnotDf$all_adj_mcnt_p_value + delta
 hotspotSigAssAnnotDf$all_adj_scnt_p_value_d = hotspotSigAssAnnotDf$all_adj_scnt_p_value + delta
 
+sum(as.numeric(hotspotSigAssAnnotDf$mcnt))
+hotspotSigAssAnnotDf$width = hotspotSigAssAnnotDf$end - hotspotSigAssAnnotDf$start + 1
+sum(as.numeric(hotspotSigAssAnnotDf$width)) / sum(as.numeric(hg19Df$size))
 
 ##
 ## Plot linear genome-wide distribution of hotspots
@@ -690,9 +710,10 @@ for (chr in chrs) {
 col2rgbLabel = function(cl) apply(col2rgb(sapply(cl, function(x)x[1])), 2, function(n) paste(n, collapse = ","))
 circosLogPDf = hotspotSigAssAnnotDf
 circosLogPDf$log10Qvalue = log10(circosLogPDf$all_adj_mcnt_p_value_d)
+circosLogPDf = circosLogPDf[order(circosLogPDf$log10Qvalue),]
 circosLogPDf$space = paste("hs", circosLogPDf$space, sep = "")
 for (i in 1:nrow(circosLogPDf)) {
-    if (circosLogPDf[i, "log10Qvalue"] < -7) {
+    if (circosLogPDf[i, "log10Qvalue"] < -5) {
         olGeneNames = strsplit(circosLogPDf[i, "overlapping_genes"], ",")[[1]]
         cisGeneNames = strsplit(circosLogPDf[i, "cis_genes"], ",")[[1]]
         allGeneNames = unique(c(olGeneNames, cisGeneNames))
@@ -710,7 +731,8 @@ for (i in 1:nrow(circosLogPDf)) {
 circosLogPFile = file.path(circosDir, "hotspot.logq")
 write.table(circosLogPDf[, c("space", "start", "end", "log10Qvalue")], circosLogPFile, row.names = F, col.names = F, sep = "\t", quote = F)
 circosLabelFile = file.path(circosDir, "hotspot.label")
-write.table(subset(circosLogPDf, log10Qvalue < -7)[, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
+#write.table(subset(circosLogPDf, log10Qvalue < -7)[, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
+write.table(circosLogPDf[1:300, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
 
 
 ##
@@ -772,7 +794,7 @@ refGeneExonSpliceDf <- foreach(j=1:length(refGeneChunks), .combine = rbind) %dop
 }
 
 refGene5utrGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = FiveUtrStart, end = FiveUtrEnd), strand = "*"))))
-refGene3utrGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = FiveUtrStart, end = FiveUtrEnd), strand = "*"))))
+refGene3utrGr = unique(sort(with(refGeneDf, GRanges(seqnames = space, IRanges(start = ThreeUtrStart, end = ThreeUtrEnd), strand = "*"))))
 refGeneExonDf = subset(refGeneExonSpliceDf, type == "exon")
 refGeneExonGr = unique(sort(with(refGeneExonDf, GRanges(seqnames = Rle(space), IRanges(start = start, end = end), strand = "*"))))
 refGeneSpliceDf = subset(refGeneExonSpliceDf, type == "splice")
@@ -786,113 +808,157 @@ hotspotAbbDf = hotspotAbbDf[hotspotAbbDf$space %in% chrs,]
 hotspotAbbGr = sort(as(as(hotspotAbbDf, "RangedData"), "GRanges"))
 
 hotspotAbb5UtrIntGr = intersect(hotspotAbbGr, refGene5utrGr)
-hotspotAbb5UtrIntMat = matrix(c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
+hotspotAbb5UtrContMat = matrix(c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
                                 sum(as.numeric(width(refGene5utrGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr))),
                                 sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGene5utrGr))) + sum(as.numeric(width(hotspotAbb5UtrIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("5'UTR", "Non-5'UTR")))
-hotspotAbb5UtrIntG = g.test(hotspotAbb5UtrIntMat)
+hotspotAbb5UtrIntG = g.test(hotspotAbb5UtrContMat)
 
 hotspotAbb5UtrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                  feature = c("5' UTR", "5' UTR"),
-                                 count = c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
+                                 size = c(sum(as.numeric(width(hotspotAbb5UtrIntGr))),
                                            sum(as.numeric(width(refGene5utrGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr)))),
                                  fraction = c(sum(as.numeric(width(hotspotAbb5UtrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                               (sum(as.numeric(width(refGene5utrGr))) - sum(as.numeric(width(hotspotAbb5UtrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
+hotspotAbb5UtrOrP = poisson.test(hotspotAbb5UtrContMat[,1], hotspotAbb5UtrContMat[,2], alternative = "two.sided")
+hotspotAbb5UtrOrR = hotspotAbb5UtrContMat[,1] / hotspotAbb5UtrContMat[,2]
+hotspotAbb5UtrOrDf = data.frame(feature = "5' UTR",
+                                odds_ratio = hotspotAbb5UtrOrR[1] / hotspotAbb5UtrOrR[2],
+                                poisson_p = hotspotAbb5UtrOrP$p.value)
+
+
 hotspotAbb3UtrIntGr = intersect(hotspotAbbGr, refGene3utrGr)
-hotspotAbb3UtrIntMat = matrix(c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
+hotspotAbb3UtrContMat = matrix(c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                 sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                 sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGene3utrGr))) + sum(as.numeric(width(hotspotAbb3UtrIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("3'UTR", "Non-3'UTR")))
-hotspotAbb3UtrIntG = g.test(hotspotAbb3UtrIntMat)
+hotspotAbb3UtrIntG = g.test(hotspotAbb3UtrContMat)
 
 hotspotAbb3UtrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                  feature = c("3' UTR", "3' UTR"),
-                                 count = c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
+                                 size = c(sum(as.numeric(width(hotspotAbb3UtrIntGr))),
                                            sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr)))),
                                  fraction = c(sum(as.numeric(width(hotspotAbb3UtrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                               (sum(as.numeric(width(refGene3utrGr))) - sum(as.numeric(width(hotspotAbb3UtrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
+hotspotAbb3UtrOrP = poisson.test(hotspotAbb3UtrContMat[,1], hotspotAbb3UtrContMat[,2], alternative = "two.sided")
+hotspotAbb3UtrOrR = hotspotAbb3UtrContMat[,1] / hotspotAbb3UtrContMat[,2]
+hotspotAbb3UtrOrDf = data.frame(feature = "3' UTR",
+                                odds_ratio = hotspotAbb3UtrOrR[1] / hotspotAbb3UtrOrR[2],
+                                poisson_p = hotspotAbb3UtrOrP$p.value)
+
+
 hotspotAbbExonIntGr = intersect(hotspotAbbGr, refGeneExonGr)
-hotspotAbbExonIntMat = matrix(c(sum(as.numeric(width(hotspotAbbExonIntGr))),
+hotspotAbbExonContMat = matrix(c(sum(as.numeric(width(hotspotAbbExonIntGr))),
                                 sum(as.numeric(width(refGeneExonGr))) - sum(as.numeric(width(hotspotAbbExonIntGr))),
                                 sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbExonIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneExonGr))) + sum(as.numeric(width(hotspotAbbExonIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Exon", "Non-exon")))
-hotspotAbbExonIntG = g.test(hotspotAbbExonIntMat)
+
+hotspotAbbExonIntG = g.test(hotspotAbbExonContMat)
 
 hotspotAbbExonIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                  feature = c("Exon", "Exon"),
-                                 count = c(sum(as.numeric(width(hotspotAbbExonIntGr))),
+                                 size = c(sum(as.numeric(width(hotspotAbbExonIntGr))),
                                            sum(as.numeric(width(refGeneExonGr))) - sum(as.numeric(width(hotspotAbbExonIntGr)))),
                                  fraction = c(sum(as.numeric(width(hotspotAbbExonIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                               (sum(as.numeric(width(refGeneExonGr))) - sum(as.numeric(width(hotspotAbbExonIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
+hotspotAbbExonOrP = poisson.test(hotspotAbbExonContMat[,1], hotspotAbbExonContMat[,2], alternative = "two.sided")
+hotspotAbbExonOrR = hotspotAbbExonContMat[,1] / hotspotAbbExonContMat[,2]
+hotspotAbbExonOrDf = data.frame(feature = "Exon",
+                                odds_ratio = hotspotAbbExonOrR[1] / hotspotAbbExonOrR[2],
+                                poisson_p = hotspotAbbExonOrP$p.value)
+
+
 hotspotAbbSpliceIntGr = intersect(hotspotAbbGr, refGeneSpliceGr)
-hotspotAbbSpliceIntMat = matrix(c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
+hotspotAbbSpliceContMat = matrix(c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                                 sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                                 sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneSpliceGr))) + sum(as.numeric(width(hotspotAbbSpliceIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Splice", "Non-slice")))
-hotspotAbbSpliceIntG = g.test(hotspotAbbSpliceIntMat)
+hotspotAbbSpliceIntG = g.test(hotspotAbbSpliceContMat)
 
 hotspotAbbSpliceIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                  feature = c("Splice", "Splice"),
-                                 count = c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
+                                 size = c(sum(as.numeric(width(hotspotAbbSpliceIntGr))),
                                            sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr)))),
                                  fraction = c(sum(as.numeric(width(hotspotAbbSpliceIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                               (sum(as.numeric(width(refGeneSpliceGr))) - sum(as.numeric(width(hotspotAbbSpliceIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
-hotspotAbbGenicIntGr = intersect(hotspotAbbGr, refGeneGenicGr)
-hotspotAbbGenicIntMat = matrix(c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
-                                sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
-                                sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
-                                sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneGenicGr))) + sum(as.numeric(width(hotspotAbbGenicIntGr)))),
-                              nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Transcript", "Non-transcript")))
-hotspotAbbGenicIntG = g.test(hotspotAbbGenicIntMat)
+hotspotAbbSpliceOrP = poisson.test(hotspotAbbSpliceContMat[,1], hotspotAbbSpliceContMat[,2], alternative = "two.sided")
+hotspotAbbSpliceOrR = hotspotAbbSpliceContMat[,1] / hotspotAbbSpliceContMat[,2]
+hotspotAbbSpliceOrDf = data.frame(feature = "Splice",
+                                odds_ratio = hotspotAbbSpliceOrR[1] / hotspotAbbSpliceOrR[2],
+                                poisson_p = hotspotAbbSpliceOrP$p.value)
 
-hotspotAbbGenicIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
-                                 feature = c("Genic", "Genic"),
-                                 count = c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
-                                           sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))),
-                                 fraction = c(sum(as.numeric(width(hotspotAbbGenicIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
-                                              (sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+#hotspotAbbGenicIntGr = intersect(hotspotAbbGr, refGeneGenicGr)
+#hotspotAbbGenicContMat = matrix(c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                #sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                #sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                #sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneGenicGr))) + sum(as.numeric(width(hotspotAbbGenicIntGr)))),
+                              #nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Transcript", "Non-transcript")))
+#hotspotAbbGenicIntG = g.test(hotspotAbbGenicContMat)
 
+#hotspotAbbGenicIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 #feature = c("Genic", "Genic"),
+                                 #size = c(sum(as.numeric(width(hotspotAbbGenicIntGr))),
+                                           #sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))),
+                                 #fraction = c(sum(as.numeric(width(hotspotAbbGenicIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              #(sum(as.numeric(width(refGeneGenicGr))) - sum(as.numeric(width(hotspotAbbGenicIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
-hotspotAbbIgrIntGr = intersect(hotspotAbbGr, refGeneIgrGr)
-hotspotAbbIgrIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
-                                sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr))),
-                                sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr))),
-                                sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneIgrGr))) + sum(as.numeric(width(hotspotAbbIgrIntGr)))),
-                              nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Intergenic", "Non-integenic")))
-hotspotAbbIgrIntG = g.test(hotspotAbbIgrIntMat)
-
-hotspotAbbIgrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
-                                 feature = c("Intergenic", "Intergenic"),
-                                 count = c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
-                                           sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))),
-                                 fraction = c(sum(as.numeric(width(hotspotAbbIgrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
-                                              (sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
 hotspotAbbIntronIntGr = intersect(hotspotAbbGr, refGeneIntronGr)
-hotspotAbbIntronIntMat = matrix(c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
+hotspotAbbIntronContMat = matrix(c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                 sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                 sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                 sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneIntronGr))) + sum(as.numeric(width(hotspotAbbIntronIntGr)))),
                               nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Intronic", "Non-intronic")))
-hotspotAbbIntronIntG = g.test(hotspotAbbIntronIntMat)
+hotspotAbbIntronIntG = g.test(hotspotAbbIntronContMat)
 
 hotspotAbbIntronIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                  feature = c("Intron", "Intron"),
-                                 count = c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
+                                 size = c(sum(as.numeric(width(hotspotAbbIntronIntGr))),
                                            sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr)))),
                                  fraction = c(sum(as.numeric(width(hotspotAbbIntronIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                               (sum(as.numeric(width(refGeneIntronGr))) - sum(as.numeric(width(hotspotAbbIntronIntGr)))) / sum(as.numeric(width(hg19Gr)))))
 
+hotspotAbbIntronOrP = poisson.test(hotspotAbbIntronContMat[,1], hotspotAbbIntronContMat[,2], alternative = "two.sided")
+hotspotAbbIntronOrR = hotspotAbbIntronContMat[,1] / hotspotAbbIntronContMat[,2]
+hotspotAbbIntronOrDf = data.frame(feature = "Intron",
+                               odds_ratio = hotspotAbbIntronOrR[1] / hotspotAbbIntronOrR[2],
+                               poisson_p = hotspotAbbIntronOrP$p.value)
 
-hotspotAbbIntDf = rbind(hotspotAbb3UtrIntDf, hotspotAbb5UtrIntDf, hotspotAbbExonIntDf, hotspotAbbGenicIntDf, hotspotAbbIgrIntDf, hotspotAbbIntronIntDf)
+
+hotspotAbbIgrIntGr = intersect(hotspotAbbGr, refGeneIgrGr)
+hotspotAbbIgrContMat = matrix(c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
+                                sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr))),
+                                sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr))),
+                                sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(refGeneIgrGr))) + sum(as.numeric(width(hotspotAbbIgrIntGr)))),
+                              nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c("Intergenic", "Non-integenic")))
+hotspotAbbIgrIntG = g.test(hotspotAbbIgrContMat)
+
+hotspotAbbIgrIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
+                                 feature = c("Intergenic", "Intergenic"),
+                                 size = c(sum(as.numeric(width(hotspotAbbIgrIntGr))),
+                                           sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))),
+                                 fraction = c(sum(as.numeric(width(hotspotAbbIgrIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
+                                              (sum(as.numeric(width(refGeneIgrGr))) - sum(as.numeric(width(hotspotAbbIgrIntGr)))) / sum(as.numeric(width(hg19Gr)))))
+
+hotspotAbbIgrOrP = poisson.test(hotspotAbbIgrContMat[,1], hotspotAbbIgrContMat[,2], alternative = "two.sided")
+hotspotAbbIgrOrR = hotspotAbbIgrContMat[,1] / hotspotAbbIgrContMat[,2]
+hotspotAbbIgrOrDf = data.frame(feature = "Intergenic",
+                               odds_ratio = hotspotAbbIgrOrR[1] / hotspotAbbIgrOrR[2],
+                               poisson_p = hotspotAbbIgrOrP$p.value)
+
+
+
+
+#
+hotspotAbbIntDf = rbind(hotspotAbb3UtrIntDf, hotspotAbb5UtrIntDf, hotspotAbbExonIntDf, hotspotAbbIntronIntDf, hotspotAbbIgrIntDf)
 
 p = ggplot(data = hotspotAbbIntDf, aes(x=hotspot, y=fraction)) +
     geom_bar(stat="identity") +
@@ -908,10 +974,31 @@ p = ggplot(data = hotspotAbbIntDf, aes(x=hotspot, y=fraction)) +
           legend.position = "none") +
     scale_x_discrete(name="") +
     scale_y_continuous("Percentage\n", label = percent) +
-    facet_wrap(~ feature, scales = "free_y")
+    facet_wrap(~ feature, scales = "free_y", nrow = 1)
 
 hotspotAbbIntFile = file.path(baseDir, "figure", "Genomic_enrichment_of_hotspot100_fdr0.01.pdf")
-ggsave(filename = hotspotAbbIntFile, plot = p, width = 12, height = 12, unit = "cm")
+ggsave(filename = hotspotAbbIntFile, plot = p, width = 18, height = 8, unit = "cm")
+
+#
+hotspotAbbOrDf = rbind(hotspotAbb3UtrOrDf, hotspotAbb5UtrOrDf, hotspotAbbExonOrDf, hotspotAbbIntronOrDf, hotspotAbbIgrOrDf)
+
+p = ggplot(data = hotspotAbbOrDf, aes(x=feature, y=log(odds_ratio))) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90), axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="") +
+    scale_y_continuous("Log2 odds ratio\n")
+
+hotspotAbbOrFile = file.path(baseDir, "figure", "Genomic_enrichment_of_hotspot100_fdr0.01.odds.pdf")
+ggsave(filename = hotspotAbbOrFile, plot = p, width = 8, height = 8, unit = "cm")
 
 
 # Epigenomic features
@@ -931,28 +1018,39 @@ chromHmmAllDf = chromHmmAllDf[chromHmmAllDf$space %in% chrs,]
 chromHmmAllDf$space = factor(chromHmmAllDf$space, levels = chrs)
 
 hotspotAbbStateIntAllDf = data.frame()
+hotspotAbbStateOrAllDf = data.frame()
+
 for (s in mixedsort(unique(chromHmmAllDf$state))) {
     print(s)
     chromHmmStateAllDf = subset(chromHmmAllDf, state == s)
     chromHmmStateAllGr = reduce(as(as(chromHmmStateAllDf, "RangedData"), "GRanges"))
     hotspotAbbStateIntGr = intersect(hotspotAbbGr, chromHmmStateAllGr)
-    hotspotAbbStateIntMat = matrix(c(sum(as.numeric(width(hotspotAbbStateIntGr))),
+    hotspotAbbStateContMat = matrix(c(sum(as.numeric(width(hotspotAbbStateIntGr))),
                                     sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr))),
                                     sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(hotspotAbbStateIntGr))),
                                     sum(as.numeric(width(hg19Gr))) - sum(as.numeric(width(hotspotAbbGr))) - sum(as.numeric(width(chromHmmStateAllGr))) + sum(as.numeric(width(hotspotAbbStateIntGr)))),
                                   nrow = 2, dimnames = list(Hotspot = c("Hotpot", "Non-hotspot"), Feature = c(s, sprintf("Non-%s", s))))
-    hotspotAbbStateIntG = g.test(hotspotAbbStateIntMat)
+    hotspotAbbStateIntG = g.test(hotspotAbbStateContMat)
+    #hotspotAbbStateIntC = chisq.test(hotspotAbbStateContMat)
 
     hotspotAbbStateIntDf = data.frame(hotspot = c("Hotspot", "Non-hotspot"),
                                      feature = c(s, s),
-                                     count = c(sum(as.numeric(width(hotspotAbbStateIntGr))),
+                                     size = c(sum(as.numeric(width(hotspotAbbStateIntGr))),
                                                sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr)))),
                                      fraction = c(sum(as.numeric(width(hotspotAbbStateIntGr))) / sum(as.numeric(width(hotspotAbbGr))),
                                                   (sum(as.numeric(width(chromHmmStateAllGr))) - sum(as.numeric(width(hotspotAbbStateIntGr)))) / sum(as.numeric(width(hg19Gr)))))
-
     hotspotAbbStateIntAllDf = rbind(hotspotAbbStateIntAllDf, hotspotAbbStateIntDf)
+
+    #hotspotAbbStateOrP = poisson.test(hotspotAbbStateContMat[,1], hotspotAbbStateContMat[,2], alternative = "two.sided")
+    hotspotAbbStateOrR = hotspotAbbStateContMat[,1] / hotspotAbbStateContMat[,2]
+    hotspotAbbStateOrDf = data.frame(feature = s,
+                                     odds_ratio = hotspotAbbStateOrR[1] / hotspotAbbStateOrR[2],
+                                     gtest_p = hotspotAbbStateIntG$p.value)
+
+    hotspotAbbStateOrAllDf = rbind(hotspotAbbStateOrAllDf, hotspotAbbStateOrDf)
 }
 
+#
 p = ggplot(data = hotspotAbbStateIntAllDf, aes(x=hotspot, y=fraction, color = feature, fill = feature)) +
     geom_bar(stat="identity") +
     theme(plot.title   = element_text(size = baseFontSize, face="bold"),
@@ -973,7 +1071,30 @@ p = ggplot(data = hotspotAbbStateIntAllDf, aes(x=hotspot, y=fraction, color = fe
     facet_wrap(~ feature, scales = "free_y", ncol = 5)
 
 hotspotAbbStateIntAllFile = file.path(baseDir, "figure", "Epignomic_enrichment_of_hotspot100_fdr0.01.pdf")
-ggsave(filename = hotspotAbbStateIntAllFile, plot = p, width = 18, height = 18, unit = "cm")
+ggsave(filename = hotspotAbbStateIntAllFile, plot = p, width = 28, height = 28, unit = "cm")
+
+#
+p = ggplot(data = hotspotAbbStateOrAllDf, aes(x=feature, y=log2(odds_ratio), color = feature, fill = feature)) +
+    geom_bar(stat="identity") +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_discrete(name="") +
+    scale_y_continuous("Log2 odds ratio\n") +
+    scale_color_manual("", values = roadmapChromBorderColors) +
+    scale_fill_manual("", values = roadmapChromFillColors)
+
+hotspotAbbStateOrAllFile = file.path(baseDir, "figure", "Epignomic_enrichment_of_hotspot100_fdr0.01.odds.pdf")
+ggsave(filename = hotspotAbbStateOrAllFile, plot = p, width = 14, height = 14, unit = "cm")
+
 
 
 ##
@@ -1084,6 +1205,125 @@ p = ggplot(data = hotspotEpigenomicDistGrpDf, aes(x=factor(state, levels = hotsp
     scale_fill_manual("", values = roadmapChromFillColors)
 hotspotEpigenomicDistGrpFile = file.path(baseDir, "figure", "Epigenomic_distribution_of_hotspot100_fdr0.01.pdf")
 ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 12, unit = "cm")
+
+
+##
+## Correlation analysis between mutation rates and epigenomic features
+##
+
+hotspotSigAnnotGr = reduce(sort(as(as(hotspotSigAnnotDf, "RangedData"), "GRanges")))
+
+cancerTypes = unique(wgsSnvAllDf$cancer)
+
+cancerSnvDf = subset(wgsSnvAllDf, cancer == "LICA")
+cancerSnvDf$start = cancerSnvDf$pos
+cancerSnvDf$end = cancerSnvDf$pos
+cancerSnvDf$space = factor(cancerSnvDf$space, levels=chrs)
+cancerSnvGr = sort(as(as(cancerSnvDf, "RangedData"), "GRanges"))
+
+cancerHotspotSnvGr = cancerSnvGr[cancerSnvGr %over% hotspotSigAnnotGr]
+cancerNonHotspotSnvGr = cancerSnvGr[cancerSnvGr %outside% hotspotSigAnnotGr]
+
+# Read Roadmap EID mapping table
+eidMapFile = file.path(baseDir, "roadmap", "Roadmap_EID_Mapping_Table.txt")
+eidMapDf = read.delim(eidMapFile, header = F, as.is = T)
+colnames(eidMapDf) = c("eid", "group", "color", "desc")
+
+#brainEids = subset(eidMapDf, group == "Breast")$eid
+selEids = c("E066", "E118")
+
+# Read Roadmap peak bed files
+totPeakLst <- foreach(eid=selEids) %dopar% {
+    print(eid)
+    peakEidBedFiles = Sys.glob(file.path(baseDir, "roadmap", "peaks", "narrowPeak", sprintf("%s-*.narrowPeak.gz", eid)))
+    totEidPeakLst = list()
+    for (peakEidBedFile in peakEidBedFiles) {
+        peakType = strsplit(strsplit(basename(peakEidBedFile), "-")[[1]][2], ".", fixed = T)[[1]][1]
+        print(peakType)
+        peakBedDf = read.delim(gzfile(peakEidBedFile), header = F, as.is = T)[, c(1:3)]
+        colnames(peakBedDf) = c("space", "start", "end")
+        peakBedDf$type = peakType
+        peakBedDf$space = gsub("chr", "", peakBedDf$space)
+        peakBedDf = subset(peakBedDf, space %in% chrs)
+        peakBedDf$space = factor(peakBedDf$space, levels = chrs)
+        peakBedDf = with(peakBedDf, peakBedDf[order(space, start, end),])
+        peakBedGr = as(as(peakBedDf, "RangedData"), "GRanges")
+        totEidPeakLst[[peakType]] = peakBedGr
+    }
+    totEidPeakLst
+}
+names(totPeakLst) = selEids
+
+# Generate tiles and count SNVs in single neurons and TCGA GBM WGS
+seqlens = hg19Df$size
+names(seqlens) = hg19Df$chrom
+tiles = tileGenome(seqlengths=seqlens, tilewidth=10^7, cut.last.tile.in.chrom=TRUE)
+tiles$hotspot_snv_cnt = countOverlaps(tiles, cancerHotspotSnvGr)
+tiles$non_hotspot_snv_cnt = countOverlaps(tiles, cancerNonHotspotSnvGr)
+
+mutPeakCorrDf = data.frame()
+for (j in 1:length(totPeakLst)) {
+    eid = names(totPeakLst)[j]
+    totEidPeakLst = totPeakLst[[j]]
+    print(eid)
+    mutPeakCorrEidDf <- foreach(k=1:length(totEidPeakLst), .combine = rbind) %dopar% {
+        peakType = names(totEidPeakLst)[k]
+        peakGr = totEidPeakLst[[k]]
+        peakColName = sprintf("%s_%s", eid, peakType)
+        print(peakColName)
+        values(tiles)[, peakColName] = 0
+        for (l in 1:length(tiles)) {
+            tile = tiles[l]
+            olMutPeak = findOverlaps(tile, peakGr)
+            values(tiles)[l, peakColName] = sum(width(pintersect(tile[queryHits(olMutPeak)], peakGr[subjectHits(olMutPeak)])))
+        }
+        scorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "spearman")
+        pcorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "pearson")
+        scorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "spearman")
+        pcorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "pearson")
+        rbind(
+              data.frame(eid = eid, peak = peakType,
+                         sample_type = "Hotspot SNVs",
+                         pcorr = as.vector(pcorr_hotspot$estimate), pp = pcorr_hotspot$p.value,
+                         scorr = as.vector(scorr_hotspot$estimate), sp = scorr_hotspot$p.value),
+              data.frame(eid = eid, peak = peakType,
+                         sample_type = "Non-hotspot SNVs",
+                         pcorr = as.vector(pcorr_non_hotspot$estimate), pp = pcorr_non_hotspot$p.value,
+                         scorr = as.vector(scorr_non_hotspot$estimate), sp = scorr_non_hotspot$p.value))
+    }
+    mutPeakCorrDf = rbind(mutPeakCorrDf, mutPeakCorrEidDf)
+}
+
+mutPeakCorrDf = merge(mutPeakCorrDf, eidMapDf, by = c("eid"), all.x = T)
+
+# Plot correlation
+for (eid in selEids) {
+    print(eid)
+    mutPeakCorrEidDf = mutPeakCorrDf[mutPeakCorrDf$eid == eid,]
+    mutPeakCorrEidDf = with(mutPeakCorrEidDf, mutPeakCorrEidDf[order(pcorr, decreasing = T),])
+    mutPeakCorrEidSngDf = mutPeakCorrEidDf[mutPeakCorrEidDf$sample_type == "Hotspot SNVs",]
+    baseFontSize = 11
+    p = ggplot(data = mutPeakCorrEidDf, aes(x=factor(peak, levels = mutPeakCorrEidSngDf$peak), y=pcorr, fill = sample_type)) +
+        geom_bar(stat="identity", position="dodge", width = 0.5) +
+        ggtitle(sprintf("%s (%s)\n", mutPeakCorrEidDf$desc[1], eid)) +
+        theme(plot.title   = element_text(size = baseFontSize + 3, face="bold"),
+              plot.margin  = unit(c(1, 1, 1, 2), "cm"),
+              axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+              axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+              axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+              axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+              strip.text.x = element_text(size = baseFontSize, face="bold"),
+              strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+              legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+              legend.text  = element_text(size = baseFontSize, family="sans"),
+              legend.direction = "vertical",
+              legend.position = "right") +
+        scale_x_discrete(name="") +
+        scale_y_continuous("Pearson correlation\n") +
+        scale_fill_manual(values = c("#A40000", "#005C95"), guide = guide_legend(title = NULL, ncol = 1))
+        plotFile = file.path(baseDir, "figure", sprintf("%s-Correlation_between_BRCA_mutation_rates_and_Roadmap_peaks.pdf", eid))
+        ggsave(filename = plotFile, plot = p, width=18, height=15, units = "cm")
+}
 
 
 ##

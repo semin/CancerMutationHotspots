@@ -1,10 +1,10 @@
-#scntFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.scnt.txt"
-#scntSelGrpFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.hotspot100.txt"
-#scntSelGrpVepFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/Combined.wgs.somatic.chr5.hotspot100.vep_in.txt"
-#distCut = 100
-#hotspotMargin = 50
-#poisMargin = 5000
-#numCores = 10
+scntFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/cancer.wgs.somatic.snv.chr5.txt"
+scntSelGrpFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/cancer.wgs.somatic.chr5.hotspot100.txt"
+scntSelGrpVepFile = "/n/data1/hms/dbmi/park/semin/BiO/Research/Hotspot/hotspot/cancer.wgs.somatic.chr5.hotspot100.vep_in.txt"
+distCut = 100
+hotspotMargin = 50
+poisMargin = 5000
+numCores = 5
 
 args = commandArgs(TRUE)
 scntFile = args[1]
@@ -25,6 +25,11 @@ require(Biostrings)
 require(GenomicRanges)
 require(BSgenome.Hsapiens.UCSC.hg19)
 
+
+##
+## Custom functions
+##
+chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE)) 
 
 ##
 ## Initialize global variables
@@ -65,6 +70,7 @@ for (i in 1:nrow(scntDf)) {
 }
 
 scntGrpSids = mclapply(scntGrp, function(x) { unique(unlist(sapply(scntDf[x, "sids"], function(x) { unlist(strsplit(x, ",")) }))) }, mc.cores = numCores)
+totScnt = length(unique(unlist(scntGrpSids)))
 scntGrpSids = mclapply(scntGrpSids, function(x) { paste(x, collapse = ",") }, mc.cores = numCores)
 scntGrpSids = unlist(scntGrpSids)
 scntGrpSidCnt = as.vector(sapply(scntGrpSids, function(x) length(strsplit(x, ",", fixed = T)[[1]])))
@@ -78,45 +84,67 @@ scntSelGrpNumSnvLoci = sapply(scntSelGrp, function(x) length(x))
 scntSelGrpSnvCnt = sapply(scntSelGrp, function(x) { sum(as.numeric(scntDf[x, "scnt"])) })
 chrL = hg19Df[hg19Df$chrom == scntDf$space[1],]$size
 
-scntSelGrpMutPvalues = mclapply(1:length(scntSelGrp),
-                            function(i) {
-                                grpB = scntSelGrpStartPos[i]
-                                grpE = scntSelGrpEndPos[i]
-                                grpL = grpE - grpB + 1
-                                grpM = scntSelGrpSnvCnt[i]
-                                smpB = grpB - poisMargin
-                                smpE = grpE + poisMargin
-                                smpB = ifelse(smpB < 0, 0, smpB)
-                                smpE = ifelse(smpE > chrL, chrL, smpE)
-                                smpL = smpE - smpB + 1
-                                smpM = sum(subset(scntDf, pos >= smpB & pos <= smpE)$scnt)
-                                lambda = smpM / smpL
-                                grpPoiP = poisson.test(grpM, lambda * grpL, alternative = "greater")$p.value
-                                return(grpPoiP)
-                            }, mc.cores = numCores)
+# test for mutation rates
+scntSelGrpChunks = chunk(1:length(scntSelGrp), numCores)
+scntSelGrpMutPvalues <- foreach(j=1:length(scntSelGrpChunks), .combine = c) %dopar% {
+    cat(sprintf("Processing mutation count chunk %d out of %d ...\n", j, length(scntSelGrpChunks)))
+    scntSelGrpMutPvalueChunks = c()
+    for (i in scntSelGrpChunks[[j]]) {
+        grpB = scntSelGrpStartPos[i]
+        grpE = scntSelGrpEndPos[i]
+        grpL = grpE - grpB + 1
+        grpM = scntSelGrpSnvCnt[i]
+        smpB = grpB - poisMargin
+        smpE = grpE + poisMargin
+        smpB = ifelse(smpB < 0, 0, smpB)
+        smpE = ifelse(smpE > chrL, chrL, smpE)
+        smpL = smpE - smpB + 1
+        smpM = sum(subset(scntDf, pos >= smpB & pos <= smpE)$scnt)
+        lambda = smpM / smpL
+        grpPoiP = poisson.test(grpM, lambda * grpL, alternative = "greater")$p.value
+
+        #pgrpPoiPs = c()
+        #for (k in sample(smpL, 100)) {
+            #pgrpB = smpB + k
+            #pgrpE = grpL - 1
+            #pgrpM = sum(subset(scntDf, pos >= pgrpB & pos <= pgrpE)$scnt)
+            #pgrpPoiP = poisson.test(pgrpM, lambda * grpL, alternative = "greater")$p.value
+            #pgrpPoiPs = c(pgrpPoiPs, pgrpPoiP)
+        #}
+
+        scntSelGrpMutPvalueChunks = c(scntSelGrpMutPvalueChunks, grpPoiP)
+    }
+    scntSelGrpMutPvalueChunks
+}
 
 scntSelGrpMutPvalues = unlist(scntSelGrpMutPvalues)
 scntSelGrpMutFdrs = p.adjust(scntSelGrpMutPvalues, method = "fdr")
 
-scntSelGrpRecurPvalues = mclapply(1:length(scntSelGrp),
-                                  function(i) {
-                                      grpB = scntSelGrpStartPos[i]
-                                      grpE = scntSelGrpEndPos[i]
-                                      grpL = grpE - grpB + 1
-                                      grpS = scntSelGrpSidCnt[i]
-                                      smpB = grpB - poisMargin
-                                      smpE = grpE + poisMargin
-                                      smpB = ifelse(smpB < 0, 0, smpB)
-                                      smpE = ifelse(smpE > chrL, chrL, smpE)
-                                      smpL = smpE - smpB + 1
-                                      smpSampleIds = unlist(sapply(subset(scntDf, pos >= smpB & pos <= smpE)$sids, function(x) { strsplit(x, ",")[[1]] }))
-                                      smpSampleUnqIds = unique(smpSampleIds)
-                                      smpSampleRecurs = sapply(smpSampleUnqIds, function(x) length(grep(x, smpSampleIds)))
-                                      smpSampleProbs = smpSampleRecurs / smpL
-                                      smpSamplePoiBinPs = dpoibin(kk = c(0:length(smpSampleUnqIds)), pp = smpSampleProbs)
-                                      grpPoiBinP = sum(smpSamplePoiBinPs[(grpS+1):(length(smpSamplePoiBinPs))])
-                                      return(grpPoiBinP)
-                                  }, mc.cores = numCores)
+# test for mutation recurrence
+scntSelGrpRecurPvalues <- foreach(j=1:length(scntSelGrpChunks), .combine = c) %dopar% {
+    cat(sprintf("Processing sample recurrence chunk %d out of %d ...\n", j, length(scntSelGrpChunks)))
+    scntSelGrpRecurPvalueChunks = c()
+    for (i in scntSelGrpChunks[[j]]) {
+        grpB = scntSelGrpStartPos[i]
+        grpE = scntSelGrpEndPos[i]
+        grpL = grpE - grpB + 1
+        grpS = scntSelGrpSidCnt[i]
+        smpB = grpB - poisMargin
+        smpE = grpE + poisMargin
+        smpB = ifelse(smpB < 0, 0, smpB)
+        smpE = ifelse(smpE > chrL, chrL, smpE)
+        smpL = smpE - smpB + 1
+        smpSampleIds = as.vector(unlist(sapply(subset(scntDf, pos >= smpB & pos <= smpE)$sids, function(x) { strsplit(x, ",")[[1]] })))
+        smpSampleUnqIds = unique(smpSampleIds)
+        smpSampleRecurs = sapply(smpSampleUnqIds, function(x) length(grep(x, smpSampleIds)))
+        smpSampleProbs = sort(as.numeric(smpSampleRecurs / smpL))
+        smpSamplePoiBinPs = dpoibin(kk = c(0:totScnt), pp = smpSampleProbs)
+        #plot(smpSamplePoiBinPs)
+        grpPoiBinP = sum(smpSamplePoiBinPs[(grpS+1):(length(smpSamplePoiBinPs))])
+        scntSelGrpRecurPvalueChunks = c(scntSelGrpRecurPvalueChunks, grpPoiBinP)
+    }
+    scntSelGrpRecurPvalueChunks
+}
 
 scntSelGrpRecurPvalues = unlist(scntSelGrpRecurPvalues)
 scntSelGrpRecurFdrs = p.adjust(scntSelGrpRecurPvalues, method = "fdr")
@@ -146,6 +174,4 @@ scntSelGrpDf = data.frame(space = rep(scntDf[1, "space"], length(scntSelGrp)),
 scntSelGrpDf = scntSelGrpDf[order(scntSelGrpDf$chr_adj_scnt_p_value),]
 
 write.table(scntSelGrpDf, scntSelGrpFile, row.names = F, col.names = T, sep = "\t", quote = F)
-#write.table(scntSelGrpDf[, c("space", "start", "end", "allele", "strand")],
-            #scntSelGrpVepFile, row.names = F, col.names = F, sep = "\t", quote = F)
 
