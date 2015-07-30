@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(5)
+registerDoMC(10)
 
 require(ape)
 require(vegan)
@@ -59,7 +59,7 @@ distCut = 100
 
 
 ##
-## Load chrom size information
+## Load chromosome size information
 ##
 hg19File = file.path(baseDir, "ucsc/database/hg19.genome")
 hg19Df = read.delim(hg19File, header=T, as.is=T)
@@ -69,6 +69,15 @@ hg19Df = hg19Df[order(hg19Df$chrom),]
 hg19Df$start = 1
 hg19Df$end = hg19Df$size
 hg19Gr = with(hg19Df, GRanges(seqnames = Rle(chrom), IRanges(start = start, end = end), strand = "*"))
+
+for(i in 1:nrow(hg19Df)) {
+    if (i < 2) {
+        hg19Df[i, "cumSize"] = 0
+        hg19Df$cumSize = as.numeric(hg19Df$cumSize)
+    } else {
+        hg19Df[i, "cumSize"] = sum(as.numeric(hg19Df[c(1:(i-1)), "size"]))
+    }
+}
 
 
 ##
@@ -160,10 +169,6 @@ for (sangCanWgsSnvFile in sangCanWgsSnvFiles) {
     }
 }
 sangAllWgsSnvDf$source = "Sanger"
-#length(unique(sangAllWgsSnvDf$sid))
-
-length(unique(sangAllWgsSnvDf$sid))
-length(unique(sangAllWgsSnvDf$cancer))
 
 
 ## cancer all SNVs into one data.frame
@@ -171,27 +176,20 @@ wgsSnvAllDf = data.frame()
 wgsSnvAllDf = rbind(wgsSnvAllDf, data.frame(icgcWgsSnvAllDf[, c("source", "cancer", "project_code", "submitted_sample_id",
                                                                 "chromosome", "chromosome_start", 
                                                                 "reference_genome_allele", "mutated_to_allele")]))
-
 colnames(wgsSnvAllDf) = c("source", "cancer", "project", "sid", "space", "pos", "ref", "alt")
-
 wgsSnvAllDf = rbind(wgsSnvAllDf, tcgaWgsSnvAllDf[, colnames(wgsSnvAllDf)])
 wgsSnvAllDf = rbind(wgsSnvAllDf, sangAllWgsSnvDf[, colnames(wgsSnvAllDf)])
-
-nrow(wgsSnvAllDf)
-length(unique(wgsSnvAllDf$sid))
-length(unique(wgsSnvAllDf$cancer))
 
 
 ##
 ## Basic statistics for sample distribution and mutation rates
 ##
 wgsSnvAllGrpByLocDf = sqldf('SELECT space, pos, ref, alt, COUNT(DISTINCT sid) AS scnt FROM wgsSnvAllDf GROUP BY space, pos, ref, alt')
-nrow(wgsSnvAllGrpByLocDf)
-
 wgsSnvAllGrpBySidDf = sqldf('SELECT source, cancer, project, sid, COUNT(*) mcnt FROM wgsSnvAllDf GROUP BY sid')
 wgsSnvAllGrpBySidDf$mrate = 1000000 * wgsSnvAllGrpBySidDf$mcnt / 3036303846
 wgsSnvAllGrpBySidDf = with(wgsSnvAllGrpBySidDf, wgsSnvAllGrpBySidDf[order(cancer, mcnt),])
 wgsSnvAllGrpBySidGrpByCancerDf = sqldf('SELECT cancer, COUNT(sid) AS sid_cnt, AVG(mcnt) AS avg_mcnt, AVG(mrate) AS avg_mrate FROM wgsSnvAllGrpBySidDf GROUP BY cancer')
+
 
 ## Sample counts
 baseFontSize = 11
@@ -238,7 +236,6 @@ wgsSnvAllGrpBySidFile = file.path(baseDir, "figure", "Mutation_rates.wgs.pdf")
 ggsave(filename = wgsSnvAllGrpBySidFile, plot = p, width = 30, height = 10, unit = "cm")
 
 
-
 ##
 ## Collapse combined SNVs
 ##
@@ -264,30 +261,22 @@ for (chr in chrs) {
 ##
 hotspotChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer.wgs.*.hotspot%d.txt", distCut))))
 hotspotDf = data.frame()
+
 for (hotspotChrFile in hotspotChrFiles) {
     cat(sprintf("Merging %s ...\n", hotspotChrFile))
     hotspotChrDf = read.delim(hotspotChrFile, header = T, as.is = T)
     hotspotDf = rbind(hotspotDf, hotspotChrDf)
 }
 
-subset(hotspotDf, is.na(scnt_p_value))
-
-summary(hotspotDf$scnt_p_value)
-summary(hotspotDf$mcnt_p_value)
-
 hotspotDf$all_adj_scnt_p_value = p.adjust(hotspotDf$scnt_p_value, method = "fdr")
 hotspotDf$all_adj_mcnt_p_value = p.adjust(hotspotDf$mcnt_p_value, method = "fdr")
-
 hotspotDf = hotspotDf[order(hotspotDf$all_adj_mcnt_p_value),]
-head(hotspotDf)
-nrow(hotspotDf)
 
 
 ##
 ## Filter based on FDR (< 0.01) and generate chromosome-level hotspot files and VEP inputs files
 ##
 hotspotSigDf = subset(hotspotDf, all_adj_mcnt_p_value < 0.01 & all_adj_scnt_p_value < 0.01)
-nrow(hotspotSigDf)
 
 for (chr in chrs) {
     chr = as.character(chr)
@@ -304,6 +293,7 @@ for (chr in chrs) {
 ## Postprocess promoter capture results (http://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-2323/)
 ##
 promIntFiles = Sys.glob(file.path(baseDir, "e-mtab-2323/*interactions.txt"))
+
 for (promIntFile in promIntFiles) {
     cat(sprintf("Processing %s ...\n", promIntFile))
     promIntDf = read.delim(promIntFile, header = T, as.is = T)
@@ -391,19 +381,17 @@ for (loopFile in loopFiles) {
 ##
 ## Annotate hotspots with VEP
 ##
+
 # ruby 2.noncodiver-hotspot_annotation.rb
 
 
-##
 ## Expand vep_out files using Ruby script
-##
 
 # ➜  hotspot>  for f in *.vep_out.txt;do ruby ../script/2.noncodiver-expand_vep_out.rb $f > $f.expanded;done
 
-##
 ## Read VEP output and filter out suspicious hotspots overlapping segmental duplications and simple repeats
-##
 hotspotSigVepOutChrFiles = mixedsort(Sys.glob(file.path(hotspotDir, sprintf("cancer*.chr*.hotspot%d.fdr0.01.vep_out.txt.expanded", distCut))))
+
 for (hotspotSigVepOutChrFile in hotspotSigVepOutChrFiles) {
     cat(sprintf("Reading %s ...\n", hotspotSigVepOutChrFile))
     hotspotSigVepOutChrDf = read.delim(hotspotSigVepOutChrFile, header = T, as.is = T)
@@ -435,14 +423,11 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
     hotspotSigAnnotDf = rbind(hotspotSigAnnotDf, hotspotAnnotChrDf)
     hotspotAnnotChrDf$allele = NULL
     hotspotAnnotChrDf$strand = NULL
-    hotspotAnnotChrGrpDf = sqldf(sprintf("SELECT Location, all_adj_mcnt_p_value, all_adj_scnt_p_value, sids, %s
+    hotspotAnnotChrGrpDf = sqldf(sprintf("SELECT space, start, end, Location, all_adj_mcnt_p_value, all_adj_scnt_p_value, sids, %s
                                  FROM hotspotAnnotChrDf 
                                  GROUP BY Location ORDER BY all_adj_mcnt_p_value ASC", paste(grep("coreMarks", colnames(hotspotAnnotChrDf), value = T), collapse = ",")))
     hotspotSigAnnotGrpDf = rbind(hotspotSigAnnotGrpDf, hotspotAnnotChrGrpDf)
 }
-
-#hotspotSigAnnotDf = with(hotspotSigAnnotDf, hotspotSigAnnotDf[order(all_adj_mcnt_p_value),])
-#nrow(hotspotSigAnnotGrpDf)
 
 
 ##
@@ -554,6 +539,7 @@ for (hotspotAnnotChrFile in hotspotAnnotChrFiles) {
 
 
 ## Run ruby script for batch association jobs
+
 # ruby 3.noncodiver-hotspot_association.rb
 
 
@@ -568,8 +554,6 @@ hotspotAssDt <- foreach(hotspotAssFile=hotspotAssFiles, .combine=function(...) r
 
 hotspotAssDf = as.data.frame(hotspotAssDt)
 hotspotSigAssDf = subset(hotspotAssDf, log2FoldExpressionWilcoxPvalue < 0.01)
-nrow(hotspotSigAssDf)
-head(hotspotSigAssDf)
 
 
 ## Update hotspots with association results
@@ -644,8 +628,121 @@ sum(as.numeric(hotspotSigAssAnnotDf$mcnt))
 hotspotSigAssAnnotDf$width = hotspotSigAssAnnotDf$end - hotspotSigAssAnnotDf$start + 1
 sum(as.numeric(hotspotSigAssAnnotDf$width)) / sum(as.numeric(hg19Df$size))
 
+
+##
+## Plot proportions of genomic/epigenomic features for each category of hotspot p-values
+##
+quant = quantile(hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value)
+hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value < quant[2], "quantile_grp"] = "Q1"
+hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value >= quant[2] & hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value < quant[3], "quantile_grp"] = "Q2"
+hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value >= quant[3] & hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value < quant[4], "quantile_grp"] = "Q3"
+hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value >= quant[4] & hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value < quant[5], "quantile_grp"] = "Q4"
+table(hotspotSigAssAnnotDf$quantile_grp)
+
+baseFontSize = 12
+p = ggplot() +
+    geom_bar(data = hotspotSigAssAnnotDf, aes(x = quantile_grp, fill = rep_state), position = "fill", binwidth = 100) +
+    theme(axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", hjust=1),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_rect(color = "black", fill="white"),
+          legend.title = element_text(size = baseFontSize - 2, face="plain", family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize - 2, face="plain", family="sans"),
+          legend.direction = "vertical",
+          legend.position = "right") +
+    scale_x_discrete(name=paste("\n-log10(q)")) +
+    scale_y_continuous(name = "Proportion\n") +
+    scale_colour_manual(values = roadmapChromFillColors)
+#show(p)
+hotspotSigAssAnnotHist = file.path(baseDir, "figure", "Barplot_for_proportions_of_epigenomic_features.pdf")
+ggsave(filename = hotspotSigAssAnnotHist, plot = p, width = 5, height = 5)
+
+
 ##
 ## Plot linear genome-wide distribution of hotspots
+##
+chrMidPos = c()
+for (chr in chrs) {
+    print(chr)
+    hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$space == chr, "abs_pos"] = 
+        hotspotSigAssAnnotDf[hotspotSigAssAnnotDf$space == chr, "start"] + hg19Df[hg19Df$chrom == chr, "cumSize"]
+    chrMidPos = c(chrMidPos, hg19Df[hg19Df$chrom == chr, "cumSize"] + hg19Df[hg19Df$chrom == chr, "size"] / 2)
+}
+names(chrMidPos) = chrs
+
+hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value = -log10(hotspotSigAssAnnotDf$all_adj_mcnt_p_value)
+hotspotSigAssAnnotDf$minus_log10_all_adj_scnt_p_value = -log10(hotspotSigAssAnnotDf$all_adj_scnt_p_value_d)
+
+for (i in 1:nrow(hotspotSigAssAnnotDf)) {
+    if (hotspotSigAssAnnotDf[i, "minus_log10_all_adj_mcnt_p_value"] > 12) {
+        olGeneNames = strsplit(hotspotSigAssAnnotDf[i, "overlapping_genes"], ",")[[1]]
+        cisGeneNames = strsplit(hotspotSigAssAnnotDf[i, "cis_genes"], ",")[[1]]
+        transGeneNames = strsplit(hotspotSigAssAnnotDf[i, "trans_genes"], ",")[[1]]
+        allGeneNames = unique(c(olGeneNames, cisGeneNames))
+        geneCnt = length(allGeneNames)
+        if (geneCnt > 0) {
+            hotspotSigAssAnnotDf[i, "mcnt_label"] = ifelse(geneCnt > 7, 
+                                                        paste(paste(allGeneNames[1:ceiling(geneCnt/2)], collapse = ","),
+                                                            paste(allGeneNames[(ceiling(geneCnt/2)+1):geneCnt], collapse = ","), sep = "\n"),
+                                                paste(allGeneNames, collapse = ",")) 
+        } else {
+            hotspotSigAssAnnotDf[i, "mcnt_label"] = hotspotSigAssAnnotDf[i, "Location"]
+        }
+    } else {
+        hotspotSigAssAnnotDf[i, "mcnt_label"] = NA
+    }
+    if (hotspotSigAssAnnotDf[i, "minus_log10_all_adj_scnt_p_value"] > 20) {
+        olGeneNames = strsplit(hotspotSigAssAnnotDf[i, "overlapping_genes"], ",")[[1]]
+        cisGeneNames = strsplit(hotspotSigAssAnnotDf[i, "cis_genes"], ",")[[1]]
+        transGeneNames = strsplit(hotspotSigAssAnnotDf[i, "trans_genes"], ",")[[1]]
+        allGeneNames = unique(c(olGeneNames, cisGeneNames))
+        geneCnt = length(allGeneNames)
+        if (geneCnt > 0) {
+            hotspotSigAssAnnotDf[i, "scnt_label"] = ifelse(geneCnt > 7, 
+                                                        paste(paste(allGeneNames[1:ceiling(geneCnt/2)], collapse = ","),
+                                                            paste(allGeneNames[(ceiling(geneCnt/2)+1):geneCnt], collapse = ","), sep = "\n"),
+                                                paste(allGeneNames, collapse = ",")) 
+        } else {
+            hotspotSigAssAnnotDf[i, "scnt_label"] = hotspotSigAssAnnotDf[i, "Location"]
+        }
+    } else {
+        hotspotSigAssAnnotDf[i, "scnt_label"] = NA
+    }
+}
+
+chrShadeDf = data.frame()
+for (i in 1:nrow(hg19Df)) {
+    if (i %% 2 == 1) {
+        chrShadeDf = rbind(chrShadeDf, data.frame(xmin = hg19Df[i, "cumSize"],
+                                                  xmax = hg19Df[i, "cumSize"] + hg19Df[i, "size"],
+                                                  ymin = 0,
+                                                  ymax = Inf))
+    }
+}
+
+baseFontSize = 15
+p = ggplot(hotspotSigAssAnnotDf) +
+    geom_rect(data=chrShadeDf, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill="gray90", alpha=0.8) +
+    geom_point(aes(x=abs_pos, y=minus_log10_all_adj_mcnt_p_value), size=2, colour="black", alpha=2/3) + 
+    geom_text(aes(x=abs_pos, y=minus_log10_all_adj_mcnt_p_value, label = hotspotSigAssAnnotDf$mcnt_label, 
+                  colour = factor(hotspotSigAssAnnotDf$rep_state), angle = 45, hjust = -0.01, vjust = -0.01, size = 5)) +
+    theme_bw(base_size=15) + 
+    theme(legend.position='none') +
+    scale_colour_manual(values = roadmapChromFillColors) +
+    scale_x_continuous(name = "", labels=as.character(chrs), breaks=chrMidPos) +
+    scale_y_continuous(name = "-log10(q)\n",
+                   breaks=seq(0, max(hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value) + 20, by=50),
+                   limits=c(0, max(hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value) + 20))
+
+hotspotSigAssAnnotFig = file.path(baseDir, "figure", "Linear_distribution_of_hotspot100_fdr0.01.mcnt.genome.pdf")
+ggsave(filename = hotspotSigAssAnnotFig, plot = p, width = 20, height = 6)
+
+
+##
+## Plot linear chromosome-wide distribution of hotspots
 ##
 for (chr in chrs) {
     cat(sprintf("Generating a plot for the linear distribution of hotspots in chr%s ...\n", chr))
@@ -733,15 +830,6 @@ write.table(circosLogPDf[, c("space", "start", "end", "log10Qvalue")], circosLog
 circosLabelFile = file.path(circosDir, "hotspot.label")
 #write.table(subset(circosLogPDf, log10Qvalue < -7)[, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
 write.table(circosLogPDf[1:300, c("space", "start", "end", "label", "rgb")], circosLabelFile, row.names = F, col.names = F, sep = "\t", quote = F)
-
-
-##
-## Distribution and correlation between significance of mutation rates and recurrence level
-##
-colnames(hotspotSigAssAnnotDf)
-hist(hotspotSigAssAnnotDf$all_adj_mcnt_p_value_d)
-hist(hotspotSigAssAnnotDf$all_adj_scnt_p_value_d)
-with(hotspotSigAssAnnotDf, plot(-log2(all_adj_mcnt_p_value_d), -log2(all_adj_scnt_p_value_d), xlim = c(0, 100), ylim = c(0, 100)))
 
 
 ##
@@ -1096,7 +1184,6 @@ hotspotAbbStateOrAllFile = file.path(baseDir, "figure", "Epignomic_enrichment_of
 ggsave(filename = hotspotAbbStateOrAllFile, plot = p, width = 14, height = 14, unit = "cm")
 
 
-
 ##
 ##
 ##
@@ -1211,29 +1298,13 @@ ggsave(filename = hotspotEpigenomicDistGrpFile, plot = p, width = 14, height = 1
 ## Correlation analysis between mutation rates and epigenomic features
 ##
 
-hotspotSigAnnotGr = reduce(sort(as(as(hotspotSigAnnotDf, "RangedData"), "GRanges")))
-
-cancerTypes = unique(wgsSnvAllDf$cancer)
-
-cancerSnvDf = subset(wgsSnvAllDf, cancer == "LICA")
-cancerSnvDf$start = cancerSnvDf$pos
-cancerSnvDf$end = cancerSnvDf$pos
-cancerSnvDf$space = factor(cancerSnvDf$space, levels=chrs)
-cancerSnvGr = sort(as(as(cancerSnvDf, "RangedData"), "GRanges"))
-
-cancerHotspotSnvGr = cancerSnvGr[cancerSnvGr %over% hotspotSigAnnotGr]
-cancerNonHotspotSnvGr = cancerSnvGr[cancerSnvGr %outside% hotspotSigAnnotGr]
-
 # Read Roadmap EID mapping table
 eidMapFile = file.path(baseDir, "roadmap", "Roadmap_EID_Mapping_Table.txt")
 eidMapDf = read.delim(eidMapFile, header = F, as.is = T)
 colnames(eidMapDf) = c("eid", "group", "color", "desc")
 
-#brainEids = subset(eidMapDf, group == "Breast")$eid
-selEids = c("E066", "E118")
-
 # Read Roadmap peak bed files
-totPeakLst <- foreach(eid=selEids) %dopar% {
+totPeakLst <- foreach(eid=sort(eidMapDf$eid)) %dopar% {
     print(eid)
     peakEidBedFiles = Sys.glob(file.path(baseDir, "roadmap", "peaks", "narrowPeak", sprintf("%s-*.narrowPeak.gz", eid)))
     totEidPeakLst = list()
@@ -1252,77 +1323,94 @@ totPeakLst <- foreach(eid=selEids) %dopar% {
     }
     totEidPeakLst
 }
-names(totPeakLst) = selEids
+names(totPeakLst) = sort(eidMapDf$eid)
 
-# Generate tiles and count SNVs in single neurons and TCGA GBM WGS
-seqlens = hg19Df$size
-names(seqlens) = hg19Df$chrom
-tiles = tileGenome(seqlengths=seqlens, tilewidth=10^7, cut.last.tile.in.chrom=TRUE)
-tiles$hotspot_snv_cnt = countOverlaps(tiles, cancerHotspotSnvGr)
-tiles$non_hotspot_snv_cnt = countOverlaps(tiles, cancerNonHotspotSnvGr)
+hotspotSigAnnotGrpGr = sort(as(as(hotspotSigAnnotGrpDf, "RangedData"), "GRanges"))
+cancerTypes = sort(unique(wgsSnvAllDf$cancer))
+mutPeakCorrTotDf = data.frame()
+tileWidth = 10^8
 
-mutPeakCorrDf = data.frame()
-for (j in 1:length(totPeakLst)) {
-    eid = names(totPeakLst)[j]
-    totEidPeakLst = totPeakLst[[j]]
-    print(eid)
-    mutPeakCorrEidDf <- foreach(k=1:length(totEidPeakLst), .combine = rbind) %dopar% {
-        peakType = names(totEidPeakLst)[k]
-        peakGr = totEidPeakLst[[k]]
-        peakColName = sprintf("%s_%s", eid, peakType)
-        print(peakColName)
-        values(tiles)[, peakColName] = 0
-        for (l in 1:length(tiles)) {
-            tile = tiles[l]
-            olMutPeak = findOverlaps(tile, peakGr)
-            values(tiles)[l, peakColName] = sum(width(pintersect(tile[queryHits(olMutPeak)], peakGr[subjectHits(olMutPeak)])))
+for (cancerType in cancerTypes) {
+    cancerSnvDf = subset(wgsSnvAllDf, cancer == cancerType)
+    cancerSnvDf$start = cancerSnvDf$pos
+    cancerSnvDf$end = cancerSnvDf$pos
+    cancerSnvDf$space = factor(cancerSnvDf$space, levels=chrs)
+    cancerSnvGr = sort(as(as(cancerSnvDf, "RangedData"), "GRanges"))
+    cancerHotspotSnvGr = cancerSnvGr[cancerSnvGr %over% hotspotSigAnnotGrpGr]
+    cancerNonHotspotSnvGr = cancerSnvGr[cancerSnvGr %outside% hotspotSigAnnotGrpGr]
+
+    # Generate tiles and count SNVs in single neurons and TCGA GBM WGS
+    seqlens = hg19Df$size
+    names(seqlens) = hg19Df$chrom
+    tiles = tileGenome(seqlengths=seqlens, tilewidth=tileWidth, cut.last.tile.in.chrom=TRUE)
+    tiles$hotspot_snv_cnt = countOverlaps(tiles, cancerHotspotSnvGr)
+    tiles$non_hotspot_snv_cnt = countOverlaps(tiles, cancerNonHotspotSnvGr)
+    mutPeakCorrDf = data.frame()
+
+    for (j in 1:length(totPeakLst)) {
+        eid = names(totPeakLst)[j]
+        totEidPeakLst = totPeakLst[[j]]
+        print(eid)
+        mutPeakCorrEidDf <- foreach(k=1:length(totEidPeakLst), .combine = rbind) %dopar% {
+            peakType = names(totEidPeakLst)[k]
+            peakGr = totEidPeakLst[[k]]
+            peakColName = sprintf("%s_%s", eid, peakType)
+            print(peakColName)
+            values(tiles)[, peakColName] = 0
+            for (l in 1:length(tiles)) {
+                tile = tiles[l]
+                olMutPeak = findOverlaps(tile, peakGr)
+                values(tiles)[l, peakColName] = sum(width(pintersect(tile[queryHits(olMutPeak)], peakGr[subjectHits(olMutPeak)])))
+            }
+            scorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "spearman")
+            pcorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "pearson")
+            scorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "spearman")
+            pcorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "pearson")
+            rbind(data.frame(cancer = cancerType, eid = eid, peak = peakType,
+                             sample_type = "Hotspot SNVs",
+                             pcorr = as.vector(pcorr_hotspot$estimate), pp = pcorr_hotspot$p.value,
+                             scorr = as.vector(scorr_hotspot$estimate), sp = scorr_hotspot$p.value),
+                  data.frame(cancer = cancerType, eid = eid, peak = peakType,
+                             sample_type = "Non-hotspot SNVs",
+                             pcorr = as.vector(pcorr_non_hotspot$estimate), pp = pcorr_non_hotspot$p.value,
+                             scorr = as.vector(scorr_non_hotspot$estimate), sp = scorr_non_hotspot$p.value))
         }
-        scorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "spearman")
-        pcorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "pearson")
-        scorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "spearman")
-        pcorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "pearson")
-        rbind(
-              data.frame(eid = eid, peak = peakType,
-                         sample_type = "Hotspot SNVs",
-                         pcorr = as.vector(pcorr_hotspot$estimate), pp = pcorr_hotspot$p.value,
-                         scorr = as.vector(scorr_hotspot$estimate), sp = scorr_hotspot$p.value),
-              data.frame(eid = eid, peak = peakType,
-                         sample_type = "Non-hotspot SNVs",
-                         pcorr = as.vector(pcorr_non_hotspot$estimate), pp = pcorr_non_hotspot$p.value,
-                         scorr = as.vector(scorr_non_hotspot$estimate), sp = scorr_non_hotspot$p.value))
+        mutPeakCorrDf = rbind(mutPeakCorrDf, mutPeakCorrEidDf)
     }
-    mutPeakCorrDf = rbind(mutPeakCorrDf, mutPeakCorrEidDf)
-}
 
-mutPeakCorrDf = merge(mutPeakCorrDf, eidMapDf, by = c("eid"), all.x = T)
+    mutPeakCorrDf = merge(mutPeakCorrDf, eidMapDf, by = c("eid"), all.x = T)
+    mutPeakCorrTotDf = rbind(mutPeakCorrTotDf, mutPeakCorrDf)
+    mutPeakCorrTable = file.path(tableDir, sprintf("%s-Correlation_between_mutation_rates-%.1e_and_Roadmap_peaks.txt", cancerType, tileWidth))
+    write.table(mutPeakCorrDf, mutPeakCorrTable, row.names = F, col.names = T, sep = "\t", quote = F)
 
-# Plot correlation
-for (eid in selEids) {
-    print(eid)
-    mutPeakCorrEidDf = mutPeakCorrDf[mutPeakCorrDf$eid == eid,]
-    mutPeakCorrEidDf = with(mutPeakCorrEidDf, mutPeakCorrEidDf[order(pcorr, decreasing = T),])
-    mutPeakCorrEidSngDf = mutPeakCorrEidDf[mutPeakCorrEidDf$sample_type == "Hotspot SNVs",]
-    baseFontSize = 11
-    p = ggplot(data = mutPeakCorrEidDf, aes(x=factor(peak, levels = mutPeakCorrEidSngDf$peak), y=pcorr, fill = sample_type)) +
-        geom_bar(stat="identity", position="dodge", width = 0.5) +
-        ggtitle(sprintf("%s (%s)\n", mutPeakCorrEidDf$desc[1], eid)) +
-        theme(plot.title   = element_text(size = baseFontSize + 3, face="bold"),
-              plot.margin  = unit(c(1, 1, 1, 2), "cm"),
-              axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
-              axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
-              axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
-              axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
-              strip.text.x = element_text(size = baseFontSize, face="bold"),
-              strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
-              legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
-              legend.text  = element_text(size = baseFontSize, family="sans"),
-              legend.direction = "vertical",
-              legend.position = "right") +
-        scale_x_discrete(name="") +
-        scale_y_continuous("Pearson correlation\n") +
-        scale_fill_manual(values = c("#A40000", "#005C95"), guide = guide_legend(title = NULL, ncol = 1))
-        plotFile = file.path(baseDir, "figure", sprintf("%s-Correlation_between_BRCA_mutation_rates_and_Roadmap_peaks.pdf", eid))
-        ggsave(filename = plotFile, plot = p, width=18, height=15, units = "cm")
+    # Plot correlation
+    for (eid in sort(eidMapDf$eid)) {
+        print(eid)
+        mutPeakCorrEidDf = mutPeakCorrDf[mutPeakCorrDf$eid == eid,]
+        mutPeakCorrEidDf = with(mutPeakCorrEidDf, mutPeakCorrEidDf[order(pcorr, decreasing = T),])
+        mutPeakCorrEidSngDf = mutPeakCorrEidDf[mutPeakCorrEidDf$sample_type == "Hotspot SNVs",]
+        baseFontSize = 11
+        p = ggplot(data = mutPeakCorrEidDf, aes(x=factor(peak, levels = mutPeakCorrEidSngDf$peak), y=pcorr, fill = sample_type)) +
+            geom_bar(stat="identity", position="dodge", width = 0.5) +
+            ggtitle(sprintf("%s (%s)\n", mutPeakCorrEidDf$desc[1], eid)) +
+            theme(plot.title   = element_text(size = baseFontSize + 3, face="bold"),
+                plot.margin  = unit(c(1, 1, 1, 2), "cm"),
+                axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+                axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+                axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45, hjust=1),
+                axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+                strip.text.x = element_text(size = baseFontSize, face="bold"),
+                strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+                legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+                legend.text  = element_text(size = baseFontSize, family="sans"),
+                legend.direction = "vertical",
+                legend.position = "right") +
+            scale_x_discrete(name="") +
+            scale_y_continuous("Pearson correlation\n") +
+            scale_fill_manual(values = c("#A40000", "#005C95"), guide = guide_legend(title = NULL, ncol = 1))
+            plotFile = file.path(baseDir, "figure", sprintf("%s-Correlation_between_%s_mutation_rates-%.1e_and_Roadmap_peaks.pdf", eid, cancerType, tileWidth))
+            ggsave(filename = plotFile, plot = p, width=18, height=15, units = "cm")
+    }
 }
 
 
@@ -1337,7 +1425,7 @@ for (c in unique(wgsSnvAllGrpBySidDf$cancer)) {
 }
 
 for (i in 1:nrow(hotspotSigAnnotGrpDf)) {
-    print(100 * i/nrow(hotspotSigAnnotGrpDf))
+    #print(100 * i/nrow(hotspotSigAnnotGrpDf))
     sampleIds = strsplit(hotspotSigAnnotGrpDf[i, "sids"], ",")[[1]]
     for (c in unique(wgsSnvAllGrpBySidDf$cancer)) {
         hotspotSigAnnotGrpDf[i, sprintf("%s_CNT", c)] = sum(sampleIds %in% sampleIdsByCancerLst[[c]])
@@ -1346,23 +1434,66 @@ for (i in 1:nrow(hotspotSigAnnotGrpDf)) {
     }
 }
 
-hotspotSigAnnotGrpDf = hotspotSigAnnotGrpDf[order(hotspotSigAnnotGrpDf$all_adj_scnt_p_value),]
-hotspotSigAnnotGrpSubDf = subset(hotspotSigAnnotGrpDf, all_adj_mcnt_p_value < 0.001 & all_adj_scnt_p_value < 0.001)
-hotspotSigAnnotGrpSubDf = hotspotSigAnnotGrpSubDf[, -which(colnames(hotspotSigAnnotGrpSubDf) %in% c(grep("_CNT", colnames(hotspotSigAnnotGrpDf), value = T), grep("_BIN", colnames(hotspotSigAnnotGrpDf), value = T)))]
+# Plot distribution of cancer type level recurrence
+hotspotSigAnnotGrpBinDf = hotspotSigAnnotGrpDf[, c("Location", "all_adj_mcnt_p_value", grep("_BIN", colnames(hotspotSigAnnotGrpDf), value = T))]
+hotspotSigAnnotGrpBinDf$CANCER_TYPE_CNT = rowSums(hotspotSigAnnotGrpDf[, grep("_BIN", colnames(hotspotSigAnnotGrpDf))])
+summary(hotspotSigAnnotGrpBinDf$CANCER_TYPE_CNT)
+hotspotSigAnnotGrpBinCntDf = as.data.frame(table(hotspotSigAnnotGrpBinDf$CANCER_TYPE_CNT))
+colnames(hotspotSigAnnotGrpBinCntDf) = c("cancer_type_cnt", "hotspot_cnt")
+hotspotSigAnnotGrpBinCntDf$cancer_type_cnt = as.numeric(as.character(hotspotSigAnnotGrpBinCntDf$cancer_type_cnt))
+hotspotSigAnnotGrpBinCntDf$hotspot_pct = 100 * hotspotSigAnnotGrpBinCntDf$hotspot_cnt / sum(hotspotSigAnnotGrpBinCntDf$hotspot_cnt)
+hotspotSigAnnotGrpBinCntDf$hotspot_pct_label = sprintf("%.3f%%", hotspotSigAnnotGrpBinCntDf$hotspot_pct)
 
-nrow(hotspotSigAnnotGrpSubDf)
-hotspotSigAnnotGrpSubFile = file.path(tableDir, "Distirution_of_hotspots_in_cancer_types.txt")
-write.table(hotspotSigAnnotGrpSubDf, hotspotSigAnnotGrpSubFile, row.names = F, col.names = T, sep = "\t", quote = F)
+baseFontSize = 8
+p = ggplot() +
+    geom_point(data = hotspotSigAnnotGrpBinCntDf, aes(x = cancer_type_cnt, y = hotspot_cnt), size = 2) +
+    geom_line(data = hotspotSigAnnotGrpBinCntDf, aes(x = cancer_type_cnt, y = hotspot_cnt, group = 1)) +
+    geom_text(data = hotspotSigAnnotGrpBinCntDf, aes(x = cancer_type_cnt, y = hotspot_cnt, label = hotspot_pct_label,
+                                                     angle = 45, hjust = -0.2, vjust = -0.3), size = 2.8) +
+    theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black", angle = 45),
+          axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          strip.text.x = element_text(size = baseFontSize, face="bold"),
+          strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          legend.text  = element_text(size = baseFontSize, family="sans"),
+          legend.direction = "horizontal",
+          legend.position = "none") +
+    scale_x_continuous(name="\n# of cancer types",
+                       breaks = 1:max(hotspotSigAnnotGrpBinCntDf$cancer_type_cnt),
+                       limits = c(1, max(hotspotSigAnnotGrpBinCntDf$cancer_type_cnt) + 2)) +
+    scale_y_continuous("# of hotspots\n", limits = c(0, max(hotspotSigAnnotGrpBinCntDf$hotspot_cnt) + 1000))
+hotspotSigAnnotGrpBinFig = file.path(baseDir, "figure", "Scatter_plot_for_cancer_type_count_of_hotspots.pdf")
+ggsave(filename = hotspotSigAnnotGrpBinFig, plot = p, width = 10, height = 10, unit = "cm")
 
-hotspotSigAnnotGrpPctDf = hotspotSigAnnotGrpDf[, c(grep("_PCT", colnames(hotspotSigAnnotGrpDf)))]
-hotspotSigAnnotGrpMat = log10(as.matrix(head(hotspotSigAnnotGrpDf[, c(grep("_PCT", colnames(hotspotSigAnnotGrpDf)))], 50)))
-hotspotSigAnnotGrpMat = hotspotSigAnnotGrpMat[rev(rownames(hotspotSigAnnotGrpMat)),]
+#p = ggplot() +
+    #geom_histogram(data = hotspotSigAnnotGrpBinDf, aes(x = CANCER_TYPE_CNT), binwidth = 1, colour = "black", fill = "white") +
+    ##stat_bin(aes(label=..count..), geom="text", position="identity", size=20, color="red") +
+    #theme(plot.title   = element_text(size = baseFontSize, face="bold"),
+          #axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
+          #axis.title.x = element_text(size = baseFontSize, face="plain", family="sans"),
+          #axis.text.x  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          #axis.text.y  = element_text(size = baseFontSize, face="plain", family="sans", colour = "black"),
+          #strip.text.x = element_text(size = baseFontSize, face="bold"),
+          #strip.text.y = element_text(size = baseFontSize, face="bold", angle = 0),
+          #legend.title = element_text(size = baseFontSize, face="plain", , family="sans", hjust = 0),
+          #legend.text  = element_text(size = baseFontSize, family="sans"),
+          #legend.direction = "horizontal",
+          #legend.position = "none") +
+    #scale_x_continuous(name="\n# of cancer types", 
+                       #limits = c(1, max(hotspotSigAnnotGrpBinDf$CANCER_TYPE_CNT)),
+                       #breaks = c(1:max(hotspotSigAnnotGrpBinDf$CANCER_TYPE_CNT) + 1)) +
+    #scale_y_continuous("# of hotspots\n")
+#show(p)
 
-colfunc = colorRampPalette(c("white", "red"))
-image(t(hotspotSigAnnotGrpMat), col = colfunc(100), axes=FALSE, xlab="", ylab="")
-axis(3, at = 1:ncol(hotspotSigAnnotGrpMat), labels=colnames(hotspotSigAnnotGrpMat), tick=T)
-axis(2, at = 1:nrow(hotspotSigAnnotGrpMat), labels=rownames(hotspotSigAnnotGrpMat), tick=T)
+#hotspotSigAnnotGrpBinFig = file.path(baseDir, "figure", "Histogram_for_distribution_of_cancer_type_recurrence.pdf")
+#ggsave(filename = hotspotSigAnnotGrpBinFig, plot = p, width = 10, height = 10, unit = "cm")
 
+hotspotSigAnnotGrpDf = hotspotSigAnnotGrpDf[order(hotspotSigAnnotGrpDf$all_adj_mcnt_p_value),]
+hotspotSigAnnotGrpTable = file.path(tableDir, "Table_of_hotspots_in_cancer_types.txt")
+write.table(hotspotSigAnnotGrpDf, hotspotSigAnnotGrpTable, row.names = F, col.names = T, sep = "\t", quote = F)
 
 
 ##
