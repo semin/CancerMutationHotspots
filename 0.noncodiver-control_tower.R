@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(10)
+registerDoMC(5)
 
 require(ape)
 require(vegan)
@@ -16,9 +16,10 @@ require(scales)
 require(gtools)
 require(gplots)
 require(ggplot2)
+require(data.table)
+
 require(annotate)
 require(snpStats)
-require(data.table)
 require(Biostrings)
 require(org.Hs.eg.db)
 require(GenomicRanges)
@@ -28,7 +29,7 @@ require(BSgenome.Hsapiens.UCSC.hg19)
 ##
 ## Custom functions
 ##
-chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE)) 
+chunk <- function(x, n) split(x, cut(seq_along(x), n, labels = FALSE)) 
 
 ##
 ## Initialize global variables
@@ -231,7 +232,6 @@ p = ggplot(data = wgsSnvAllGrpBySidDf, aes(x=factor(cancer, levels = wgsSnvAllGr
           legend.position = "bottom") +
     scale_x_discrete(name="") +
     scale_y_continuous("# of SNVs per Mb\n")
-
 wgsSnvAllGrpBySidFile = file.path(baseDir, "figure", "Mutation_rates.wgs.pdf")
 ggsave(filename = wgsSnvAllGrpBySidFile, plot = p, width = 30, height = 10, unit = "cm")
 
@@ -692,7 +692,7 @@ for (i in 1:nrow(hotspotSigAssAnnotDf)) {
             hotspotSigAssAnnotDf[i, "mcnt_label"] = hotspotSigAssAnnotDf[i, "Location"]
         }
     } else {
-        hotspotSigAssAnnotDf[i, "mcnt_label"] = NA
+        hotspotSigAssAnnotDf[i, "mcnt_label"] = ""
     }
     if (hotspotSigAssAnnotDf[i, "minus_log10_all_adj_scnt_p_value"] > 20) {
         olGeneNames = strsplit(hotspotSigAssAnnotDf[i, "overlapping_genes"], ",")[[1]]
@@ -709,7 +709,7 @@ for (i in 1:nrow(hotspotSigAssAnnotDf)) {
             hotspotSigAssAnnotDf[i, "scnt_label"] = hotspotSigAssAnnotDf[i, "Location"]
         }
     } else {
-        hotspotSigAssAnnotDf[i, "scnt_label"] = NA
+        hotspotSigAssAnnotDf[i, "scnt_label"] = ""
     }
 }
 
@@ -723,6 +723,7 @@ for (i in 1:nrow(hg19Df)) {
     }
 }
 
+# all together
 baseFontSize = 15
 p = ggplot(hotspotSigAssAnnotDf) +
     geom_rect(data=chrShadeDf, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax), fill="gray90", alpha=0.8) +
@@ -739,6 +740,34 @@ p = ggplot(hotspotSigAssAnnotDf) +
 
 hotspotSigAssAnnotFig = file.path(baseDir, "figure", "Linear_distribution_of_hotspot100_fdr0.01.mcnt.genome.pdf")
 ggsave(filename = hotspotSigAssAnnotFig, plot = p, width = 20, height = 6)
+
+
+# separately for each chromosome
+hotspotSigAssAnnotDf$mcnt_label_star = ifelse(!is.na(hotspotSigAssAnnotDf$mcnt_label), "*", "")
+
+baseFontSize = 15
+p = ggplot(hotspotSigAssAnnotDf) +
+    geom_point(aes(x=start, y=minus_log10_all_adj_mcnt_p_value), size=2, colour="black", alpha=2/3) + 
+    geom_text(aes(x=start, y=minus_log10_all_adj_mcnt_p_value, label = hotspotSigAssAnnotDf$mcnt_label, colour = factor(hotspotSigAssAnnotDf$rep_state), angle = 45, hjust = -0.01, vjust = -0.01, size = 1)) +
+    #geom_text(aes(x=start, y=minus_log10_all_adj_mcnt_p_value, label = hotspotSigAssAnnotDf$mcnt_label_star, colour = factor(hotspotSigAssAnnotDf$rep_state), angle = 45, hjust = -0.01, vjust = -0.01, size = 1)) +
+    theme_bw(base_size=15) + 
+    theme(legend.position='none', axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+    #scale_colour_manual(values = roadmapChromFillColors) +
+    #scale_x_continuous(name = "Chromosome") +
+    #scale_x_continuous(name = "", labels=as.character(chrs), breaks=chrMidPos) +
+    #scale_y_continuous(name = "-log10(q)\n",
+                   #breaks=seq(0, max(hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value) + 20, by=50),
+                   #limits=c(0, max(hotspotSigAssAnnotDf$minus_log10_all_adj_mcnt_p_value) + 20)) +
+    scale_x_continuous(expand = c(.2, .3)) +
+    scale_y_continuous(name = "-log10(q)\n", expand = c(.2, .3)) +
+    facet_wrap(~ space, nrow = 6, scales = "free", shrink = FALSE)
+hotspotSigAssAnnotFig = file.path(baseDir, "figure", "Linear_distribution_of_hotspot100_fdr0.01.mcnt.genome.facetted.pdf")
+ggsave(filename = hotspotSigAssAnnotFig, plot = p, width = 10, height = 10)
+
+gt <- ggplot_gtable(ggplot_build(p))
+gt$layout$clip[gt$layout$name == "panel"] <- "off"
+grid.draw(gt)
+
 
 
 ##
@@ -774,7 +803,7 @@ for (chr in chrs) {
     yByScale = maxGeneCnt 
     p = ggplot(hotspotSigAssAnnotChrDf, aes(x = start, y = -log10(all_adj_mcnt_p_value_d))) + 
         geom_hline(yintercept = seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yBy), by=yBy), size = 0.5, linetype="dashed", alpha=.4) +
-        geom_point(colour = "red", size = 2) + 
+        geom_point(colour = "black", size = 2) + 
         geom_text(aes(x = start, y = -log10(all_adj_mcnt_p_value_d), label = hotspotSigAssAnnotChrDf$label, 
                       colour = factor(hotspotSigAssAnnotChrDf$rep_state), angle = 45, hjust = -0.01, vjust = -0.01, size = 9)) +
         theme(axis.title.y = element_text(size = baseFontSize, face="plain", family="sans", angle = 90),
@@ -792,7 +821,7 @@ for (chr in chrs) {
                            breaks=seq(1, max(hotspotSigAssAnnotChrDf$end), by=breakSize),
                            limits=c(1, max(hotspotSigAssAnnotChrDf$end) + breakSize),
                            labels=as.integer(seq(0, max(hotspotSigAssAnnotChrDf$end), by=breakSize)/10^6)) +
-        scale_y_continuous(name = "Significance of hotspot mutation (-log10(q)) \n",
+        scale_y_continuous(name = "-log10(q) \n",
                            breaks=seq(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yBy), by=yBy),
                            limits=c(1, max(-log10(hotspotSigAssAnnotChrDf$all_adj_mcnt_p_value_d) + yByScale * yBy))) +
         scale_colour_manual(values = roadmapChromFillColors)
