@@ -4,7 +4,7 @@ rm(list=ls())
 ## Load libraries
 ##
 require(doMC)
-registerDoMC(5)
+registerDoMC(12)
 
 require(ape)
 require(vegan)
@@ -1356,8 +1356,8 @@ names(totPeakLst) = sort(eidMapDf$eid)
 
 hotspotSigAnnotGrpGr = sort(as(as(hotspotSigAnnotGrpDf, "RangedData"), "GRanges"))
 cancerTypes = sort(unique(wgsSnvAllDf$cancer))
+tileWidth = 10^6
 mutPeakCorrTotDf = data.frame()
-tileWidth = 10^8
 
 for (cancerType in cancerTypes) {
     cancerSnvDf = subset(wgsSnvAllDf, cancer == cancerType)
@@ -1376,11 +1376,11 @@ for (cancerType in cancerTypes) {
     tiles$non_hotspot_snv_cnt = countOverlaps(tiles, cancerNonHotspotSnvGr)
     mutPeakCorrDf = data.frame()
 
-    for (j in 1:length(totPeakLst)) {
+    mutPeakCorrDf <- foreach(j=1:length(totPeakLst), .combine = rbind) %dopar% {
         eid = names(totPeakLst)[j]
         totEidPeakLst = totPeakLst[[j]]
-        print(eid)
-        mutPeakCorrEidDf <- foreach(k=1:length(totEidPeakLst), .combine = rbind) %dopar% {
+        mutPeakCorrEidDf = data.frame()
+        for (k in 1:length(totEidPeakLst)) {
             peakType = names(totEidPeakLst)[k]
             peakGr = totEidPeakLst[[k]]
             peakColName = sprintf("%s_%s", eid, peakType)
@@ -1395,16 +1395,16 @@ for (cancerType in cancerTypes) {
             pcorr_hotspot = cor.test(values(tiles)[, peakColName], tiles$hotspot_snv_cnt, method = "pearson")
             scorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "spearman")
             pcorr_non_hotspot = cor.test(values(tiles)[, peakColName], tiles$non_hotspot_snv_cnt, method = "pearson")
-            rbind(data.frame(cancer = cancerType, eid = eid, peak = peakType,
-                             sample_type = "Hotspot SNVs",
-                             pcorr = as.vector(pcorr_hotspot$estimate), pp = pcorr_hotspot$p.value,
-                             scorr = as.vector(scorr_hotspot$estimate), sp = scorr_hotspot$p.value),
-                  data.frame(cancer = cancerType, eid = eid, peak = peakType,
-                             sample_type = "Non-hotspot SNVs",
-                             pcorr = as.vector(pcorr_non_hotspot$estimate), pp = pcorr_non_hotspot$p.value,
-                             scorr = as.vector(scorr_non_hotspot$estimate), sp = scorr_non_hotspot$p.value))
+            mutPeakCorrEidDf = rbind(mutPeakCorrEidDf, rbind(data.frame(cancer = cancerType, eid = eid, peak = peakType,
+                                                                        sample_type = "Hotspot SNVs",
+                                                                        pcorr = as.vector(pcorr_hotspot$estimate), pp = pcorr_hotspot$p.value,
+                                                                        scorr = as.vector(scorr_hotspot$estimate), sp = scorr_hotspot$p.value),
+                                                             data.frame(cancer = cancerType, eid = eid, peak = peakType,
+                                                                        sample_type = "Non-hotspot SNVs",
+                                                                        pcorr = as.vector(pcorr_non_hotspot$estimate), pp = pcorr_non_hotspot$p.value,
+                                                                        scorr = as.vector(scorr_non_hotspot$estimate), sp = scorr_non_hotspot$p.value)))
         }
-        mutPeakCorrDf = rbind(mutPeakCorrDf, mutPeakCorrEidDf)
+        mutPeakCorrEidDf
     }
 
     mutPeakCorrDf = merge(mutPeakCorrDf, eidMapDf, by = c("eid"), all.x = T)
