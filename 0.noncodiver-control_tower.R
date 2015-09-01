@@ -1360,6 +1360,7 @@ tileWidth = 10^6
 mutPeakCorrTotDf = data.frame()
 
 for (cancerType in cancerTypes) {
+    print(cancerType)
     cancerSnvDf = subset(wgsSnvAllDf, cancer == cancerType)
     cancerSnvDf$start = cancerSnvDf$pos
     cancerSnvDf$end = cancerSnvDf$pos
